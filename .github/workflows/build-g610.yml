@@ -13,17 +13,21 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            meson ninja-build pkg-config python3-mako python3-yaml python3-ply python3-packaging \
-            bison flex glslang-tools cmake ccache clang llvm-dev libclang-dev libclc-dev \
-            libllvmspirvlib-dev spirv-tools libspirv-tools-dev zlib1g-dev libexpat1-dev \
-            libdrm-dev libelf-dev file binutils unzip zip
+            ninja-build pkg-config python3-pip python3-mako python3-yaml python3-ply python3-packaging \
+            python3-pycparser bison flex glslang-tools cmake ccache clang-18 llvm-18-dev libclang-18-dev \
+            libclang-cpp18-dev libclc-18-dev libclc-18 libllvmspirvlib-18-dev llvm-spirv-18 \
+            spirv-tools spirv-headers zlib1g-dev libexpat1-dev libdrm-dev libelf-dev \
+            rustc cargo file binutils unzip zip
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+          sudo pip3 install --break-system-packages --upgrade meson mako pyyaml
+          command -v bindgen >/dev/null || cargo install bindgen-cli --locked
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Fetch exact Mesa
         run: ./scripts/fetch-mesa.sh
       - name: Apply patches (g610-v10-csf)
         run: ./scripts/apply-patches.sh --profile g610-v10-csf
       - name: Build host tools and Android driver
         env:
-          ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_LATEST_HOME }}
           PANVK_JOBS: 4
         run: |
           export ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
