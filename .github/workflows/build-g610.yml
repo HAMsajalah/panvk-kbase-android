@@ -1,0 +1,38 @@
+name: build-g610
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build pkg-config python3-mako python3-yaml python3-ply python3-packaging \
+            bison flex glslang-tools cmake ccache clang llvm-dev libclang-dev libclc-dev \
+            libllvmspirvlib-dev spirv-tools libspirv-tools-dev zlib1g-dev libexpat1-dev \
+            libdrm-dev libelf-dev file binutils unzip zip
+      - name: Fetch exact Mesa
+        run: ./scripts/fetch-mesa.sh
+      - name: Apply patches (g610-v10-csf)
+        run: ./scripts/apply-patches.sh --profile g610-v10-csf
+      - name: Build host tools and Android driver
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_LATEST_HOME }}
+          PANVK_JOBS: 4
+        run: |
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
+          ./scripts/build-android.sh --profile g610-v10-csf
+      - name: Validate binary
+        run: ./scripts/validate-binary.sh --abi android dist/android-g610-v10-csf/libvulkan_panfrost.so
+      - name: Package
+        run: ./scripts/package-android-adpkg.sh --profile g610-v10-csf --version v0.1.0-g610-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: panvk-g610
+          path: |
+            dist/android-g610-v10-csf/libvulkan_panfrost.so
+            dist/*.adpkg.zip

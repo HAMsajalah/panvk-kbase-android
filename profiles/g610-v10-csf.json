@@ -1,8 +1,23 @@
 {
   "profile": "g610-v10-csf",
-  "gpu": "Mali-G610",
+  "device": "Vivo V27",
+  "model": "V2231",
+  "soc": "MediaTek Dimensity 7200",
+  "socId": "MT6886",
+  "gpu": "Mali-G610 MC4",
+  "gpuId": "0xa8670000",
   "panArch": 10,
   "frontend": "CSF",
   "kernelInterface": "mali_kbase",
-  "status": "planned P24 (not yet validated)"
+  "node": "/dev/mali0",
+  "android": "15",
+  "kernel": "5.15.178",
+  "kbaseUapi": "1.14",
+  "selectionKey": {
+    "pan_arch": 10,
+    "gpu_id": "0xa8670000",
+    "frontend": "CSF",
+    "kbase_uapi": "1.14"
+  },
+  "status": "validating (user device, v9 faux123 build runs here)"
 }

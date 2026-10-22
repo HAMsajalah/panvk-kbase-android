@@ -1,0 +1,92 @@
+diff --git a/.github/workflows/build-g610.yml b/.github/workflows/build-g610.yml
+new file mode 100644
+index 0000000..b425601
+--- /dev/null
++++ b/.github/workflows/build-g610.yml
+@@ -0,0 +1,38 @@
++name: build-g610
++on:
++  workflow_dispatch:
++jobs:
++  build:
++    runs-on: ubuntu-24.04
++    timeout-minutes: 150
++    steps:
++      - uses: actions/checkout@v4
++      - name: Host packages
++        run: |
++          sudo apt-get update
++          sudo apt-get install -y --no-install-recommends \
++            meson ninja-build pkg-config python3-mako python3-yaml python3-ply python3-packaging \
++            bison flex glslang-tools cmake ccache clang llvm-dev libclang-dev libclc-dev \
++            libllvmspirvlib-dev spirv-tools libspirv-tools-dev zlib1g-dev libexpat1-dev \
++            libdrm-dev libelf-dev file binutils unzip zip
++      - name: Fetch exact Mesa
++        run: ./scripts/fetch-mesa.sh
++      - name: Apply patches (g610-v10-csf)
++        run: ./scripts/apply-patches.sh --profile g610-v10-csf
++      - name: Build host tools and Android driver
++        env:
++          ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_LATEST_HOME }}
++          PANVK_JOBS: 4
++        run: |
++          export ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
++          ./scripts/build-android.sh --profile g610-v10-csf
++      - name: Validate binary
++        run: ./scripts/validate-binary.sh --abi android dist/android-g610-v10-csf/libvulkan_panfrost.so
++      - name: Package
++        run: ./scripts/package-android-adpkg.sh --profile g610-v10-csf --version v0.1.0-g610-test
++      - uses: actions/upload-artifact@v4
++        with:
++          name: panvk-g610
++          path: |
++            dist/android-g610-v10-csf/libvulkan_panfrost.so
++            dist/*.adpkg.zip
+diff --git a/profiles/g610-v10-csf.json b/profiles/g610-v10-csf.json
+index e6e7fd4..c8ed7d4 100644
+--- a/profiles/g610-v10-csf.json
++++ b/profiles/g610-v10-csf.json
+@@ -1,8 +1,23 @@
+ {
+   "profile": "g610-v10-csf",
+-  "gpu": "Mali-G610",
++  "device": "Vivo V27",
++  "model": "V2231",
++  "soc": "MediaTek Dimensity 7200",
++  "socId": "MT6886",
++  "gpu": "Mali-G610 MC4",
++  "gpuId": "0xa8670000",
+   "panArch": 10,
+   "frontend": "CSF",
+   "kernelInterface": "mali_kbase",
+-  "status": "planned P24 (not yet validated)"
++  "node": "/dev/mali0",
++  "android": "15",
++  "kernel": "5.15.178",
++  "kbaseUapi": "1.14",
++  "selectionKey": {
++    "pan_arch": 10,
++    "gpu_id": "0xa8670000",
++    "frontend": "CSF",
++    "kbase_uapi": "1.14"
++  },
++  "status": "validating (user device, v9 faux123 build runs here)"
+ }
+diff --git a/scripts/apply-patches.sh b/scripts/apply-patches.sh
+index aec99b4..5ca730e 100755
+--- a/scripts/apply-patches.sh
++++ b/scripts/apply-patches.sh
+@@ -13,9 +13,11 @@ esac; done
+ ARCH="$(python3 -c "import json;print(json.load(open('$ROOT/profiles/$PROFILE.json'))['panArch'])")"
+ FRONTEND="$(python3 -c "import json;print(json.load(open('$ROOT/profiles/$PROFILE.json'))['frontend'])")"
+ SERIES="common android kbase-common app-loader wsi"
+-if [ "$FRONTEND" = "CSF" ]; then SERIES="$SERIES csf csf-v$ARCH"; else SERIES="$SERIES jm-v$ARCH"; fi
++# csf-v11 covers CSF arch v10..v14 (Mali-G610/G710 = arch 10 share the v11 series).
++CSF_ARCH="$ARCH"; [ "$ARCH" = "10" ] && CSF_ARCH=11
++if [ "$FRONTEND" = "CSF" ]; then SERIES="$SERIES csf csf-v$CSF_ARCH"; else SERIES="$SERIES jm-v$ARCH"; fi
+ # Universal ICD: jm-v9 sits on top of the csf-v11 series (v9 JM + v10-v14 CSF).
+-if [ "$PROFILE" = "g615-v11-csf" ]; then SERIES="$SERIES jm-v9"; fi
++if [ "$PROFILE" = "g615-v11-csf" ] || [ "$PROFILE" = "g610-v10-csf" ]; then SERIES="$SERIES jm-v9"; fi
+ echo "profile=$PROFILE arch=$ARCH frontend=$FRONTEND series: $SERIES"
+ git -C "$MESA" status --porcelain | head -n 5
+ APPLIED=0
