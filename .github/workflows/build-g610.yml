@@ -1,5 +1,7 @@
 name: build-g610
 on:
+  push:
+    branches: [g610]
   workflow_dispatch:
 jobs:
   build:
