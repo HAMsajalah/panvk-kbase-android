@@ -19,7 +19,7 @@ jobs:
             spirv-tools spirv-headers zlib1g-dev libexpat1-dev libdrm-dev libelf-dev \
             rustc cargo file binutils unzip zip
           echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
-          sudo pip3 install --break-system-packages --upgrade meson mako pyyaml
+          sudo pip3 install --break-system-packages --upgrade meson
           command -v bindgen >/dev/null || cargo install bindgen-cli --locked
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Fetch exact Mesa
