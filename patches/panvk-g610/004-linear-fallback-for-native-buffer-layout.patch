@@ -1,0 +1,78 @@
+From 9e1b2c3d4e5f60718293a4b5c6d7e8f901234567 Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Sat, 24 Oct 2026 00:20:00 +0700
+Subject: [PATCH panvk-g610 004] panvk/android: linear fallback for
+ VkNativeBufferANDROID layout
+
+On a vivo V2231 (Mali-G610 MC4) vkCreateSwapchainKHR fails with
+VK_ERROR_INVALID_EXTERNAL_HANDLE even with csf-v11/003.  Logcat:
+
+  [P0A-V19-FULLPLANE] mapper load failed (2 candidate names, first=common)
+  [P0A-V19-FULLPLANE] complete metadata unavailable rc=-95; refusing
+    guessed layout
+  u_gralloc_get_buffer_basic_info failed
+
+and nothing else.  The AHB probe (csf-v11/003) never logs, so the
+swapchain does not take the AHB path: VulkanSamples presents through
+VK_ANDROID_native_buffer, whose layout comes from vk_android_get_anb_layout.
+That helper only called vk_gralloc_to_drm_explicit_layout and had no
+fallback, so on a ROM where no gralloc mapper is reachable it returned
+VK_ERROR_INVALID_EXTERNAL_HANDLE and the swapchain gave up.
+
+VkNativeBufferANDROID gives stride in pixels, so a single-plane
+uncompressed native buffer can be described as DRM_FORMAT_MOD_LINEAR at
+offset 0 with rowPitch = stride * blocksize.  Fall back to that when the
+mapper path fails; anything else (multi-fd, compressed/block formats) is
+still refused, and both outcomes log at [P0A-V19-FULLPLANE].
+
+Tested GPU: none yet (Mali-G610 MC4 report only)
+Validation test: VulkanSamples createSwapchainKHR on Mali-G610
+
+diff --git a/src/vulkan/runtime/vk_android.c b/src/vulkan/runtime/vk_android.c
+index 97637ed..e921581 100644
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -320,8 +320,39 @@ vk_android_get_anb_layout(
+       .pixel_stride = native_buffer->stride,
+    };
+ 
+-   return vk_gralloc_to_drm_explicit_layout(&gr_handle, out,
+-                                            out_layouts, max_planes);
++   VkResult result =
++      vk_gralloc_to_drm_explicit_layout(&gr_handle, out, out_layouts, max_planes);
++   if (result == VK_ERROR_INVALID_EXTERNAL_HANDLE) {
++      /* No gralloc mapper is reachable on this ROM (panvk-g610 ANB fallback).
++       * The VkNativeBufferANDROID contract gives stride in pixels; for a
++       * single-plane uncompressed buffer assume a linear layout at offset 0,
++       * matching what the AHB probe already assumes. */
++      const unsigned bpp = vk_format_get_blocksize(pCreateInfo->format);
++      if (native_buffer->handle && native_buffer->handle->numFds == 1 &&
++          native_buffer->stride > 0 && bpp > 0 &&
++          vk_format_get_blockheight(pCreateInfo->format) == 1) {
++         memset(out, 0, sizeof(*out));
++         memset(out_layouts, 0, sizeof(*out_layouts) * max_planes);
++         out->sType =
++            VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT;
++         out->pPlaneLayouts = out_layouts;
++         out->drmFormatModifier = DRM_FORMAT_MOD_LINEAR;
++         out->drmFormatModifierPlaneCount = 1;
++         out_layouts[0].rowPitch = (uint64_t)native_buffer->stride * bpp;
++         mesa_logi("[P0A-V19-FULLPLANE] anb_layout fallback LINEAR fmt=%d "
++                   "stride=%d bpp=%u rowPitch=%llu",
++                   native_buffer->format, native_buffer->stride, bpp,
++                   (unsigned long long)out_layouts[0].rowPitch);
++         result = VK_SUCCESS;
++      } else {
++         mesa_logw("[P0A-V19-FULLPLANE] anb_layout fallback refused: fds=%d "
++                   "stride=%d bpp=%u blockheight=%u",
++                   native_buffer->handle ? native_buffer->handle->numFds : -1,
++                   native_buffer->stride, bpp,
++                   vk_format_get_blockheight(pCreateInfo->format));
++      }
++   }
++   return result;
+ }
+ 
+ VkResult
+-- 
+2.55.0
