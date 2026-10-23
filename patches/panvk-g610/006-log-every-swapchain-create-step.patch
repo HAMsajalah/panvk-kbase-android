@@ -1,0 +1,109 @@
+From 5c4d3e2f1a0b99887766554433221100ffeeddcc Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Sat, 24 Oct 2026 03:10:00 +0700
+Subject: [PATCH panvk-g610 006] panvk/android: log every swapchain create step
+
+v0.2.5 accepts the native buffer layout ("anb_layout fallback LINEAR
+fmt=1 stride=1088 bpp=4 ... fds=3") and vkCreateSwapchainKHR still
+returns VK_ERROR_INVALID_EXTERNAL_HANDLE with no other log line.  The
+create loop in panvk_wsi_android_create_swapchain has four failing steps
+(CreateImage, vkGetAndroidHardwareBufferPropertiesANDROID, AllocateMemory,
+BindImageMemory2) and several import helpers fail silently, so the failing
+step cannot be identified from a report.
+
+Log the extent at entry, every step's VkResult at failure and the success
+path, all under [P0A-V19-FULLPLANE] so one
+`adb logcat -d | grep P0A-V19-FULLPLANE` shows the whole sequence.  Also
+tag the silent import failures (no dma-buf fd in the AHB properties query
+and in the AHB import, no compatible memory type) and the ANB create
+failures.
+
+No behaviour change: every return value is the same.
+
+Tested GPU: none (diagnostics only)
+Validation test: VulkanSamples createSwapchainKHR on Mali-G610
+
+--- a/src/panfrost/vulkan/panvk_wsi.c
++++ b/src/panfrost/vulkan/panvk_wsi.c
+@@ -357,6 +357,9 @@ panvk_wsi_android_create_swapchain(
+ 
+    VkIcdSurfaceAndroid *android_surface = (VkIcdSurfaceAndroid *)surface;
+    chain->window = android_surface->window;
++   mesa_logi("[P0A-V19-FULLPLANE] wsi create swapchain %ux%u fmt=%d window=%p",
++             pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
++             pCreateInfo->imageFormat, (void *)chain->window);
+    if (chain->window) {
+       ANativeWindow_setBuffersGeometry(chain->window,
+                                        pCreateInfo->imageExtent.width,
+@@ -401,6 +404,7 @@ panvk_wsi_android_create_swapchain(
+       };
+       result = dev->dispatch_table.CreateImage(device, &ici, pAllocator, &chain->images[i].base.image);
+       if (result != VK_SUCCESS) {
++         mesa_logw("[P0A-V19-FULLPLANE] wsi CreateImage res=%d", result);
+          panvk_android_swapchain_destroy(&chain->base, pAllocator);
+          return result;
+       }
+@@ -410,6 +414,7 @@ panvk_wsi_android_create_swapchain(
+       };
+       result = panvk_GetAndroidHardwareBufferPropertiesANDROID(device, chain->images[i].ahb, &ahb_props);
+       if (result != VK_SUCCESS) {
++         mesa_logw("[P0A-V19-FULLPLANE] wsi AHBProps res=%d", result);
+          panvk_android_swapchain_destroy(&chain->base, pAllocator);
+          return result;
+       }
+@@ -444,6 +449,7 @@ panvk_wsi_android_create_swapchain(
+       };
+       result = dev->dispatch_table.AllocateMemory(device, &mai, pAllocator, &chain->images[i].base.memory);
+       if (result != VK_SUCCESS) {
++         mesa_logw("[P0A-V19-FULLPLANE] wsi AllocateMemory res=%d", result);
+          panvk_android_swapchain_destroy(&chain->base, pAllocator);
+          return result;
+       }
+@@ -457,6 +463,7 @@ panvk_wsi_android_create_swapchain(
+       vk_android_set_owned_ahb(chain->images[i].ahb);
+       result = dev->dispatch_table.BindImageMemory2(device, 1, &bmi);
+       if (result != VK_SUCCESS) {
++         mesa_logw("[P0A-V19-FULLPLANE] wsi BindImageMemory2 res=%d", result);
+          panvk_android_swapchain_destroy(&chain->base, pAllocator);
+          return result;
+       }
+@@ -464,6 +471,8 @@ panvk_wsi_android_create_swapchain(
+    vk_android_set_owned_ahb(NULL);
+ 
+    *swapchain_out = &chain->base;
++   mesa_logi("[P0A-V19-FULLPLANE] wsi create swapchain ok images=%u",
++             num_images);
+    return VK_SUCCESS;
+ }
+ 
+--- a/src/panfrost/vulkan/panvk_android.c
++++ b/src/panfrost/vulkan/panvk_android.c
+@@ -449,8 +449,11 @@ panvk_GetAndroidHardwareBufferPropertiesANDROID(
+    const native_handle_t *handle = AHardwareBuffer_getNativeHandle(buffer);
+    uint64_t real_size = 0;
+    int fd = panvk_android_find_dma_buf_fd(device_h, handle, &real_size);
+-   if (fd < 0 || real_size == 0)
++   if (fd < 0 || real_size == 0) {
++      mesa_logw("[P0A-V19-FULLPLANE] AHBProps: no dma-buf fd (fds=%d size=%lld)",
++                handle ? handle->numFds : -1, (long long)real_size);
+       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
++   }
+ 
+    pProperties->allocationSize = real_size;
+    return VK_SUCCESS;
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -239,8 +239,9 @@ vk_android_import_anb_memory(struct vk_device *device,
+ 
+    uint32_t compatible_types = mem_reqs.memoryTypeBits & fd_props.memoryTypeBits;
+    if (!compatible_types) {
+-      mesa_loge("No compatible AHB mem types (img_reqs=%#b,fd_reqs=%#b)",
+-                 mem_reqs.memoryTypeBits, fd_props.memoryTypeBits);
++      mesa_loge("[P0A-V19-FULLPLANE] anb import: no compatible mem types "
++                "(img=%#b fd=%#b)",
++                mem_reqs.memoryTypeBits, fd_props.memoryTypeBits);
+       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+ 
+-- 
+2.55.0
