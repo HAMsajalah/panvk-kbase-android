@@ -42,16 +42,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential bison flex pkg-config ccache zip unzip file \
+            build-essential bison flex pkg-config ccache zip unzip file cmake \
             python3 python3-pip python3-mako python3-yaml python3-ply python3-packaging \
             libdrm-dev zlib1g-dev libexpat1-dev \
             libx11-dev libx11-xcb-dev libxcb1-dev libxcb-randr0-dev libxcb-dri3-dev \
             libxcb-present-dev libxcb-shm0-dev libxcb-sync-dev libxcb-xfixes0-dev \
-            libxshmfence-dev
+            libxshmfence-dev \
+            llvm-18-dev libclang-18-dev libclang-cpp18-dev libllvmspirvlib-18-dev
           python3 -m pip install --user --upgrade "meson>=1.4" ninja
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
           meson --version
           ninja --version
+          echo "llvm-config: $(llvm-config-18 --version) rtti=$(llvm-config-18 --has-rtti)"
+          pkg-config --modversion LLVMSPIRVLib
 
       - name: Set up Android NDK
         id: ndk
@@ -78,15 +82,35 @@ jobs:
       - name: Apply patch series
         run: ./scripts/apply-patches.sh --profile "${{ inputs.profile }}"
 
+      - name: Build SPIRV-Tools 2024.1
+        run: |
+          set -eu
+          # Noble only ships SPIRV-Tools 2023.6, Mesa's CLC requires >= 2024.1.
+          if [ ! -d work/spirv-tools ]; then
+            git clone --depth 1 --branch v2024.1 \
+              https://github.com/KhronosGroup/SPIRV-Tools.git work/spirv-tools
+          fi
+          cd work/spirv-tools
+          python3 utils/git-sync-deps
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DSPIRV_SKIP_TESTS=ON -DSPIRV_SKIP_EXECUTABLES=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build build -j"$PANVK_JOBS"
+          sudo cmake --install build
+          pkg-config --modversion SPIRV-Tools
+
       - name: Build pinned host codegen tools
         run: |
           set -eu
+          # Match Mesa's C++ RTTI setting to the distro LLVM build.
+          CPP_RTTI=true
+          if [ "$(llvm-config-18 --has-rtti)" != "YES" ]; then CPP_RTTI=false; fi
           meson setup build/host-tools work/mesa \
             -Dbuildtype=release -Dgallium-drivers= -Dvulkan-drivers=panfrost \
             -Dplatforms= -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dopengl=false \
             -Dgles1=disabled -Dgles2=disabled -Dmesa-clc=enabled -Dinstall-mesa-clc=true \
             -Dprecomp-compiler=enabled -Dinstall-precomp-compiler=true \
-            -Dllvm=disabled -Dzstd=disabled
+            -Dllvm=enabled -Dcpp_rtti="$CPP_RTTI" -Dzstd=disabled
           ninja -j"$PANVK_JOBS" -C build/host-tools \
             src/compiler/clc/mesa_clc \
             src/compiler/spirv/vtn_bindgen2 \

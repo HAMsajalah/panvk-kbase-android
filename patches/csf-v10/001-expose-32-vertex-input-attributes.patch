@@ -1,0 +1,95 @@
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Subject: [PATCH csf-v10 001] panvk: expose 32 vertex input attributes
+Generated-by: LLM
+
+Purpose: maxVertexInputAttributes/maxVertexInputBindings were pinned to the
+ Vulkan minimum of 16 (MAX_VBS), which is our own bookkeeping limit: the Mali
+ hardware supports up to 2^9 vertex attributes (see the comment above
+ .maxVertexInputAttributes in panvk_vX_physical_device.c).  D3D11 - and
+ therefore DXVK - needs 32 input elements, so games that use more than 16
+ attributes could not create a pipeline.
+ .
+ Raise MAX_VBS (bindings + attribute table) and MAX_VS_ATTRIBS (MALI_ATTRIBUTE
+ slots reserved in the VS driver set, images follow them on pre-Valhall) to 32,
+ and allow vertex shader input locations up to MAX_VS_ATTRIBS.  The Bifrost
+ attribute_count computation is switched to the 64-bit mask so sparse
+ locations above 15 are still counted correctly there.
+ .
+ Nothing is spoofed: the attribute descriptors are actually emitted for all
+ 32 locations on CSF (prepare_vs_driver_set loops over MAX_VS_ATTRIBS and
+ vk_vertex_input_state supports 32 attributes), the limit reported to
+ applications matches what the driver implements.
+Source/Reference: Mesa 5a07217f034b3e50d8c7c7794f97a2df1742613b,
+ src/panfrost/vulkan/panvk_cmd_draw.h (MAX_VBS),
+ src/panfrost/vulkan/panvk_shader.h (MAX_VS_ATTRIBS),
+ src/panfrost/vulkan/csf/panvk_vX_cmd_draw.c (prepare_vs_driver_set)
+Tested GPU: none yet (compile-level)
+Tested Kbase UAPI: n/a
+Mesa base range: 5a07217f034b3e50d8c7c7794f97a2df1742613b
+Dependencies: none
+Validation test: panvk-test vertex attribute stress with 32 locations
+
+diff --git a/src/panfrost/vulkan/panvk_cmd_draw.h b/src/panfrost/vulkan/panvk_cmd_draw.h
+index ff34da3..5b25d5a 100644
+--- a/src/panfrost/vulkan/panvk_cmd_draw.h
++++ b/src/panfrost/vulkan/panvk_cmd_draw.h
+@@ -27,7 +27,11 @@
+ #include "pan_fb.h"
+ #include "pan_props.h"
+ 
+-#define MAX_VBS 16
++/* The hardware supports up to 2^9 vertex attributes/bindings, only our own
++ * bookkeeping limits this.  Expose 32 attributes, which is what D3D11
++ * (and therefore DXVK) needs, instead of the Vulkan minimum of 16.
++ */
++#define MAX_VBS 32
+ 
+ #if PAN_ARCH < 10
+ #define MAX_FRAMEBUFFER_DIMENSION (1 << 14)
+diff --git a/src/panfrost/vulkan/panvk_shader.h b/src/panfrost/vulkan/panvk_shader.h
+index fabb9a9..f8aa45e 100644
+--- a/src/panfrost/vulkan/panvk_shader.h
++++ b/src/panfrost/vulkan/panvk_shader.h
+@@ -27,7 +27,12 @@
+ extern const struct vk_device_shader_ops panvk_per_arch(device_shader_ops);
+ 
+ #define MAX_RTS 8
+-#define MAX_VS_ATTRIBS 16
++/* Number of MALI_ATTRIBUTE slots reserved at the start of the VS attribute
++ * table (images are placed right after this range on pre-Valhall).  The
++ * hardware supports up to 2^9 attributes, so 32 is a safe software limit and
++ * matches the D3D11 limit.
++ */
++#define MAX_VS_ATTRIBS 32
+ 
+ #if PAN_ARCH < 9
+ 
+diff --git a/src/panfrost/vulkan/panvk_vX_shader.c b/src/panfrost/vulkan/panvk_vX_shader.c
+index ae29960..1e2b7ec 100644
+--- a/src/panfrost/vulkan/panvk_vX_shader.c
++++ b/src/panfrost/vulkan/panvk_vX_shader.c
+@@ -1112,11 +1112,11 @@ panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
+        * opposite. Patch attribute_count accordingly, so
+        * pan_shader_prepare_rsd() does what we expect.
+        */
+-      uint32_t gen_attribs =
+-         (shader->info.attributes_read & VERT_BIT_GENERIC_ALL) >>
+-         VERT_ATTRIB_GENERIC0;
++      uint64_t gen_attribs =
++         (shader->info.attributes_read >> VERT_ATTRIB_GENERIC0) &
++         BITFIELD64_MASK(MAX_VS_ATTRIBS);
+ 
+-      shader->info.attribute_count = util_last_bit(gen_attribs);
++      shader->info.attribute_count = util_last_bit64(gen_attribs);
+ 
+       /* NULL IDVS shaders are not allowed. */
+       if (!bin_size)
+@@ -1471,7 +1471,7 @@ panvk_compile_shader(struct panvk_device *dev,
+           */
+          nir_foreach_shader_in_variable(var, nir) {
+             assert(var->data.location >= VERT_ATTRIB_GENERIC0 &&
+-                   var->data.location <= VERT_ATTRIB_GENERIC15);
++                   var->data.location < VERT_ATTRIB_GENERIC0 + MAX_VS_ATTRIBS);
+             var->data.driver_location =
+                var->data.location - VERT_ATTRIB_GENERIC0;
+          }
