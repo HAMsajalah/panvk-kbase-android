@@ -24,9 +24,11 @@ else SERIES="$SERIES jm-v$ARCH"; fi
 # Universal ICD: jm-v9 sits on top of the csf-v11 series (v9 JM + v10-v14 CSF),
 # jm-v7 (Bifrost v6/v7 kbase unblock) on top of jm-v9.
 if [ "$PROFILE" = "g615-v11-csf" ]; then SERIES="$SERIES jm-v9 jm-v7"; fi
-# G610 32-attribute build: applies last, after the whole csf-v11 series
-# (csf-v11/092 has MAX_VS_ATTRIBS 16 in its hunk context).
-if [ "$PROFILE" = "g610-v10-csf" ]; then SERIES="$SERIES panvk-32attr"; fi
+# G610 32-attribute build: the universal tree is csf-v11 + jm-v9 + jm-v7
+# (same series as upstream RC5-universal; csf-v11 alone does not compile
+# because csf-v11/196 uses the max_insts field that jm-v9/017 adds), then
+# the 32-attribute patch last (csf-v11/092 has MAX_VS_ATTRIBS 16 as context).
+if [ "$PROFILE" = "g610-v10-csf" ]; then SERIES="$SERIES jm-v9 jm-v7 panvk-32attr"; fi
 echo "profile=$PROFILE arch=$ARCH frontend=$FRONTEND series: $SERIES"
 git -C "$MESA" status --porcelain | head -n 5
 APPLIED=0

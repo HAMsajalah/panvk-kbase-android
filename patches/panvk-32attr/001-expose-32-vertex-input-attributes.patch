@@ -23,8 +23,8 @@ Purpose: maxVertexInputAttributes/maxVertexInputBindings were pinned to the
  vk_vertex_input_state supports 32 attributes), the limit reported to
  applications matches what the driver implements.
  .
- This patch is applied after the complete csf-v11 series, on top of the
- universal v10-v14 CSF tree validated by upstream RC5-universal (v10 probes
+ This patch is applied after the complete universal series
+ (csf-v11 + jm-v9 + jm-v7) validated by upstream RC5-universal (v10 probes
  36/36-39/39 on Mali-G610/G710).  It is carried in its own family because
  csf-v11/092 has MAX_VS_ATTRIBS 16 as hunk context and would not apply after
  this change.
@@ -37,7 +37,7 @@ Source/Reference: Mesa 5a07217f034b3e50d8c7c7794f97a2df1742613b,
 Tested GPU: none yet (compile-level)
 Tested Kbase UAPI: n/a
 Mesa base range: 5a07217f034b3e50d8c7c7794f97a2df1742613b
-Dependencies: csf-v11 series (must be the last family applied)
+Dependencies: csf-v11 + jm-v9 + jm-v7 (must be the last family applied)
 Validation test: panvk-test vertex attribute stress with 32 locations
 
 diff --git a/src/panfrost/compiler/pan_compiler.h b/src/panfrost/compiler/pan_compiler.h
@@ -67,7 +67,7 @@ index c1c24d6..6c8a2bc 100644
  #if PAN_ARCH >= 14
  #define MAX_LAYERS_PER_TILER_DESC 256
 diff --git a/src/panfrost/vulkan/panvk_cmd_draw.h b/src/panfrost/vulkan/panvk_cmd_draw.h
-index f9c03a5..328b21e 100644
+index 9943277..d56a73d 100644
 --- a/src/panfrost/vulkan/panvk_cmd_draw.h
 +++ b/src/panfrost/vulkan/panvk_cmd_draw.h
 @@ -27,7 +27,11 @@
@@ -84,7 +84,7 @@ index f9c03a5..328b21e 100644
  #if PAN_ARCH < 10
  #define MAX_FRAMEBUFFER_DIMENSION (1 << 14)
 diff --git a/src/panfrost/vulkan/panvk_shader.h b/src/panfrost/vulkan/panvk_shader.h
-index 0a7e06e..0f51c3b 100644
+index bf2904f..0bea0ae 100644
 --- a/src/panfrost/vulkan/panvk_shader.h
 +++ b/src/panfrost/vulkan/panvk_shader.h
 @@ -33,7 +33,12 @@ struct panvk_device;
@@ -102,10 +102,10 @@ index 0a7e06e..0f51c3b 100644
  #if PAN_ARCH < 9
  
 diff --git a/src/panfrost/vulkan/panvk_vX_shader.c b/src/panfrost/vulkan/panvk_vX_shader.c
-index 766e610..72be77a 100644
+index 03ce28c..963e7f3 100644
 --- a/src/panfrost/vulkan/panvk_vX_shader.c
 +++ b/src/panfrost/vulkan/panvk_vX_shader.c
-@@ -3041,11 +3041,11 @@ panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
+@@ -3085,11 +3085,11 @@ panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
         * opposite. Patch attribute_count accordingly, so
         * pan_shader_prepare_rsd() does what we expect.
         */
@@ -121,7 +121,7 @@ index 766e610..72be77a 100644
  
        /* NULL IDVS shaders are not allowed. */
        if (!bin_size)
-@@ -3504,7 +3504,7 @@ panvk_compile_shader(struct panvk_device *dev,
+@@ -3555,7 +3555,7 @@ panvk_compile_shader(struct panvk_device *dev,
  #endif
              nir_foreach_shader_in_variable(var, nir) {
                 assert(var->data.location >= VERT_ATTRIB_GENERIC0 &&
