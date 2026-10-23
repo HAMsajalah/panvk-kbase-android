@@ -13,10 +13,20 @@ esac; done
 ARCH="$(python3 -c "import json;print(json.load(open('$ROOT/profiles/$PROFILE.json'))['panArch'])")"
 FRONTEND="$(python3 -c "import json;print(json.load(open('$ROOT/profiles/$PROFILE.json'))['frontend'])")"
 SERIES="common android kbase-common app-loader wsi"
-if [ "$FRONTEND" = "CSF" ]; then SERIES="$SERIES csf csf-v$ARCH"; else SERIES="$SERIES jm-v$ARCH"; fi
+if [ "$FRONTEND" = "CSF" ]; then
+  # Upstream dropped patches/csf-v10: the csf-v11 series is the universal
+  # v10-v14 CSF tree (validated on Mali-G610/G710 by RC5-universal).  Fall
+  # back to it whenever there is no per-arch family directory.
+  CSF_FAM="csf-v$ARCH"
+  [ -d "$ROOT/patches/$CSF_FAM" ] || CSF_FAM="csf-v11"
+  SERIES="$SERIES csf $CSF_FAM"
+else SERIES="$SERIES jm-v$ARCH"; fi
 # Universal ICD: jm-v9 sits on top of the csf-v11 series (v9 JM + v10-v14 CSF),
 # jm-v7 (Bifrost v6/v7 kbase unblock) on top of jm-v9.
 if [ "$PROFILE" = "g615-v11-csf" ]; then SERIES="$SERIES jm-v9 jm-v7"; fi
+# G610 32-attribute build: applies last, after the whole csf-v11 series
+# (csf-v11/092 has MAX_VS_ATTRIBS 16 in its hunk context).
+if [ "$PROFILE" = "g610-v10-csf" ]; then SERIES="$SERIES panvk-32attr"; fi
 echo "profile=$PROFILE arch=$ARCH frontend=$FRONTEND series: $SERIES"
 git -C "$MESA" status --porcelain | head -n 5
 APPLIED=0

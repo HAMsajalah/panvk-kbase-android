@@ -16,7 +16,7 @@ on:
         required: true
       release_string:
         description: Optional driverInfo release string
-        default: PanVK-kbase g610-v10-csf CI
+        default: v0.2.0-32attr
         required: false
 
 permissions:
