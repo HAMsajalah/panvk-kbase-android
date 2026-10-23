@@ -16,11 +16,15 @@ on:
         required: true
       release_string:
         description: Optional driverInfo release string
-        default: v0.2.0-32attr
+        default: v0.2.1-g610-tessfix
+        required: false
+      release_tag:
+        description: Publish the .so to this GitHub release tag (empty = no release)
+        default: ""
         required: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -165,3 +169,15 @@ jobs:
           name: panvk-${{ inputs.profile }}-${{ github.run_number }}
           path: out/
           if-no-files-found: warn
+
+      - name: Publish to GitHub release
+        if: inputs.release_tag != '' && hashFiles('out/libvulkan_panfrost.so') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "PanVK-kbase $TAG" --notes "Built by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            out/libvulkan_panfrost.so out/SHA256SUMS.txt out/BUILD-INFO.txt
