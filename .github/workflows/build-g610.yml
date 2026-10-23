@@ -82,12 +82,14 @@ jobs:
       - name: Apply patch series
         run: ./scripts/apply-patches.sh --profile "${{ inputs.profile }}"
 
-      - name: Build SPIRV-Tools 2024.1
+      - name: Build SPIRV-Tools 2024.4
         run: |
           set -eu
-          # Noble only ships SPIRV-Tools 2023.6, Mesa's CLC requires >= 2024.1.
+          # Noble only ships SPIRV-Tools 2023.6. Mesa's CLC needs >= 2024.1 and
+          # LinkerOptions::SetAllowPtrTypeMismatch (KhronosGroup/SPIRV-Tools#5534),
+          # which first appeared in the v2024.4 tag.
           if [ ! -d work/spirv-tools ]; then
-            git clone --depth 1 --branch v2024.1 \
+            git clone --depth 1 --branch v2024.4 \
               https://github.com/KhronosGroup/SPIRV-Tools.git work/spirv-tools
           fi
           cd work/spirv-tools
