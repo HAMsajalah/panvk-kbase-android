@@ -1,0 +1,48 @@
+From 3f8a2b1c4d5e6f708192a3b4c5d6e7f809182736 Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Sat, 24 Oct 2026 02:50:00 +0700
+Subject: [PATCH panvk-g610 005] panvk/android: accept multi-fd native buffer
+ handles in the linear fallback
+
+v0.2.4 on a vivo V2231 refused every safe fallback:
+
+  anb_layout fallback refused: fds=3 stride=1088 bpp=4 blockheight=1
+
+stride=1088 for a 4-byte-per-pixel buffer and blockheight 1 is an ordinary
+uncompressed RGBA plane; only the fd count tripped the check, which
+required exactly one fd.  MediaTek/Arm gralloc handles carry extra fds
+(metadata, shared fd) next to the plane at data[0], and the ANB import
+path already takes the dma-buf from data[0] (vk_android_import_anb_memory),
+so the fd count says nothing about the pixel layout.  Require at least
+one fd and log the count of the accepted buffer.
+
+Tested GPU: none yet (Mali-G610 MC4 report only)
+Validation test: VulkanSamples createSwapchainKHR on Mali-G610
+
+diff --git a/src/vulkan/runtime/vk_android.c b/src/vulkan/runtime/vk_android.c
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -328,7 +328,7 @@ vk_android_get_anb_layout(
+        * single-plane uncompressed buffer assume a linear layout at offset 0,
+        * matching what the AHB probe already assumes. */
+       const unsigned bpp = vk_format_get_blocksize(pCreateInfo->format);
+-      if (native_buffer->handle && native_buffer->handle->numFds == 1 &&
++      if (native_buffer->handle && native_buffer->handle->numFds >= 1 &&
+           native_buffer->stride > 0 && bpp > 0 &&
+           vk_format_get_blockheight(pCreateInfo->format) == 1) {
+          memset(out, 0, sizeof(*out));
+@@ -340,9 +340,10 @@ vk_android_get_anb_layout(
+          out->drmFormatModifierPlaneCount = 1;
+          out_layouts[0].rowPitch = (uint64_t)native_buffer->stride * bpp;
+          mesa_logi("[P0A-V19-FULLPLANE] anb_layout fallback LINEAR fmt=%d "
+-                   "stride=%d bpp=%u rowPitch=%llu",
++                   "stride=%d bpp=%u rowPitch=%llu fds=%d",
+                    native_buffer->format, native_buffer->stride, bpp,
+-                   (unsigned long long)out_layouts[0].rowPitch);
++                   (unsigned long long)out_layouts[0].rowPitch,
++                   native_buffer->handle->numFds);
+          result = VK_SUCCESS;
+       } else {
+          mesa_logw("[P0A-V19-FULLPLANE] anb_layout fallback refused: fds=%d "
+-- 
+2.55.0
