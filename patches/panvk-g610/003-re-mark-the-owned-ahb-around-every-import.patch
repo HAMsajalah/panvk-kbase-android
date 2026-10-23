@@ -1,0 +1,77 @@
+From 7c2e5a1b3d4f60718293a4b5c6d7e8f901234567 Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Fri, 23 Oct 2026 23:10:00 +0700
+Subject: [PATCH panvk-g610 003] panvk/wsi: re-mark the owned AHB around every
+ import, log a skipped linear probe
+
+On a vivo V2231 (Mali-G610 MC4, vendor API 35) vkCreateSwapchainKHR fails
+with VK_ERROR_INVALID_EXTERNAL_HANDLE.  Logcat:
+
+  [P0A-V19-FULLPLANE] mapper load failed (2 candidate names, first=common)
+  [P0A-V19-FULLPLANE] complete metadata unavailable rc=-95; refusing
+    guessed layout
+  u_gralloc_get_buffer_basic_info failed
+
+and nothing after it: on devices where the fallback works (Pixel 6, same
+"mapper load failed") the next line is "backend=cpu-linear-probe ... ->
+LINEAR".  The probe has one silent exit, the ownership check, so on this
+device the AHB reached the import unmarked and the swapchain creation
+gave up.
+
+The WSI marks the AHB it just allocated as owned once, before CreateImage.
+The layout is resolved later, by whichever call actually imports the
+buffer (AllocateMemory with VkImportAndroidHardwareBufferInfoANDROID, or
+BindImageMemory2 on the deferred image), so mark it again right before
+both.  The mark is per-thread and cleared after the loop, unchanged.
+
+The skipped probe now logs both pointers at warning level instead of
+returning silently, so a report shows whether the buffer was unmarked
+(ahb=0x... owned=0x... / owned=(nil)) or the layout was refused later.
+
+Tested GPU: none yet (Mesa-G610 MC4 report only)
+Validation test: PanProbe swapchain_lifecycle and vktest
+ createSwapchainKHR on Mali-G610
+
+diff --git a/src/panfrost/vulkan/panvk_wsi.c b/src/panfrost/vulkan/panvk_wsi.c
+index e485002..5e35210 100644
+--- a/src/panfrost/vulkan/panvk_wsi.c
++++ b/src/panfrost/vulkan/panvk_wsi.c
+@@ -426,6 +426,11 @@ panvk_wsi_android_create_swapchain(
+          .sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID,
+          .buffer = chain->images[i].ahb,
+       };
++      /* The AHB layout is resolved lazily, in whatever call imports it; the
++       * no-mapper linear probe only touches an AHB marked owned, and the mark
++       * is per-thread.  Re-mark right before the two calls that can import.
++       */
++      vk_android_set_owned_ahb(chain->images[i].ahb);
+       VkMemoryDedicatedAllocateInfo dai = {
+          .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+          .pNext = &imp,
+@@ -449,6 +454,7 @@ panvk_wsi_android_create_swapchain(
+          .memory = chain->images[i].base.memory,
+          .memoryOffset = 0,
+       };
++      vk_android_set_owned_ahb(chain->images[i].ahb);
+       result = dev->dispatch_table.BindImageMemory2(device, 1, &bmi);
+       if (result != VK_SUCCESS) {
+          panvk_android_swapchain_destroy(&chain->base, pAllocator);
+diff --git a/src/vulkan/runtime/vk_android.c b/src/vulkan/runtime/vk_android.c
+index 97637ed..e3afae3 100644
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -695,8 +695,11 @@ vk_android_probe_linear_ahb(struct AHardwareBuffer *ahb,
+                             VkImageDrmFormatModifierExplicitCreateInfoEXT *out,
+                             VkSubresourceLayout *out_layouts, int max_planes)
+ {
+-   if (!ahb || ahb != vk_android_owned_ahb)
++   if (!ahb || ahb != vk_android_owned_ahb) {
++      mesa_logw("[P0A-V19-FULLPLANE] linear probe skipped: ahb=%p owned=%p",
++                (void *)ahb, (void *)vk_android_owned_ahb);
+       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
++   }
+ 
+    const char *why = NULL;
+    const uint64_t pitch = (uint64_t)d->stride * 4;
+-- 
+2.55.0
