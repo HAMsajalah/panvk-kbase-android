@@ -1,0 +1,62 @@
+From 9f1c4d2a7b3e4f5061728394a5b6c7d8e9f0a1b2 Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Fri, 23 Oct 2026 21:05:00 +0700
+Subject: [PATCH panvk-g610 001] panvk/csf: keep the fused tess gen pass opt-in
+
+csf-v11/213 and csf-v11/219 let one workgroup run COUNT, the prefix sum
+and (for small direct draws) the WITH_COUNTS tessellation itself. 219
+gated that gen variant on its stack: quads need 5648 B of TLS and fall
+back to panlib_tess_gen(), triangles need 3616 B and stayed fused.
+
+On a Mali-G610 MC4 (gpu_id 0xa8670000, v10 CSF) the fused triangle
+variant writes broken interior domain points.  PanProbe
+tests/dxvk/vulkan/tessellation on this build: the two triangle-domain
+cases draw only the three corner triangles of the patch
+(tri_equal_l3 and winding_ccw_cull_back: 352 px where the patch covers
+1128; every quad, isoline, point, indirect and GS case passes), and
+tests/dxvk/vulkan/xfb tes_capture (triangles, level 1) ends the CSG with
+status 0x050002c1 "exception 0xc1", an MMU translation fault, then the
+subqueues time out and vkWaitForFences returns VK_TIMEOUT.
+
+That is the same failure shape csf-v11/219 documented for quads on
+G615 ("interior points come from the dynamically indexed tessellator
+arrays, which live on the stack"), so the gate moves the triangle
+variant to the path every quad already takes and that passes on this
+device: panlib_tess_gen(), a separate many-workgroup dispatch after the
+fused count/scan.
+
+PANVK_TESS_FUSE_GEN_MAX now defaults to 0.  Setting it to 64 (or any
+patch count) restores the fused gen pass on parts where it is
+validated; PANVK_TESS_FUSE=0 still disables the fused count/scan too.
+
+Tested GPU: none yet (Mali-G610 MC4 report only)
+Mesa base range: 5a07217f034b3e50d8c7c7794f97a2df1742613b
+Dependencies: csf-v11 + jm-v9 + jm-v7 (after them, before panvk-g610)
+Validation test: PanProbe tessellation TESSELLATION_FAILS=0 and xfb
+ all cases PASS on Mali-G610
+
+diff --git a/src/panfrost/vulkan/panvk_vX_device.c b/src/panfrost/vulkan/panvk_vX_device.c
+index e25566e..c6be671 100644
+--- a/src/panfrost/vulkan/panvk_vX_device.c
++++ b/src/panfrost/vulkan/panvk_vX_device.c
+@@ -698,8 +698,17 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
+       device->vk.enabled_features.tessellationShader;
+    simple_mtx_init(&device->gpu_prerast_lock, mtx_plain);
+    device->tess_opt.fuse = debug_get_num_option("PANVK_TESS_FUSE", 1) != 0;
++   /* csf-v11 tess-fuse-stack: the fused workgroup runs the WITH_COUNTS pass
++    * itself (the gen variant) only while a draw the CPU knows to have at most
++    * this many patches.  Opt-in: on a Mali-G610 MC4 the triangle variant
++    * (3616 B of TLS) writes broken interior domain points - PanProbe draws 3
++    * of the 9 triangles of an L3 triangle patch, and xfb tes_capture ends the
++    * CSG with exception 0xc1 (MMU fault).  Quads already fall back to
++    * panlib_tess_gen() on every part (5648 B), which passes there.
++    * PANVK_TESS_FUSE_GEN_MAX=64 restores the fused gen on validated parts.
++    */
+    device->tess_opt.fuse_gen_max =
+-      debug_get_num_option("PANVK_TESS_FUSE_GEN_MAX", 64);
++      debug_get_num_option("PANVK_TESS_FUSE_GEN_MAX", 0);
+    device->tess_opt.setup_in_step =
+       debug_get_num_option("PANVK_TESS_SETUP_STEP", 1) != 0;
+    device->tess_opt.arenas =
+-- 
+2.55.0

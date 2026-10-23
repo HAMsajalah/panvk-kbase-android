@@ -27,8 +27,11 @@ if [ "$PROFILE" = "g615-v11-csf" ]; then SERIES="$SERIES jm-v9 jm-v7"; fi
 # G610 32-attribute build: the universal tree is csf-v11 + jm-v9 + jm-v7
 # (same series as upstream RC5-universal; csf-v11 alone does not compile
 # because csf-v11/196 uses the max_insts field that jm-v9/017 adds), then
-# the 32-attribute patch last (csf-v11/092 has MAX_VS_ATTRIBS 16 as context).
-if [ "$PROFILE" = "g610-v10-csf" ]; then SERIES="$SERIES jm-v9 jm-v7 panvk-32attr"; fi
+# the 32-attribute patch last (csf-v11/092 has MAX_VS_ATTRIBS 16 as context),
+# then the G610 fix-ups (patches/panvk-g610).
+if [ "$PROFILE" = "g610-v10-csf" ]; then
+  SERIES="$SERIES jm-v9 jm-v7 panvk-32attr panvk-g610"
+fi
 echo "profile=$PROFILE arch=$ARCH frontend=$FRONTEND series: $SERIES"
 git -C "$MESA" status --porcelain | head -n 5
 APPLIED=0
