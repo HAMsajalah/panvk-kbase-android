@@ -1,0 +1,141 @@
+name: build-g610
+
+# Manual Android/Bionic ICD build for the Mali-G610 (v10 CSF) profile.
+# The upstream build.yml only checks patch applicability; this one produces
+# dist/android-<profile>/libvulkan_panfrost.so and uploads it as an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Kbase profile to build
+        default: g610-v10-csf
+        required: true
+      api:
+        description: Android API level (default 29 = loads on Android 10+)
+        default: "29"
+        required: true
+      release_string:
+        description: Optional driverInfo release string
+        default: PanVK-kbase g610-v10-csf CI
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      PANVK_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bison flex pkg-config ccache zip unzip file \
+            python3 python3-pip python3-mako python3-yaml python3-ply python3-packaging \
+            libdrm-dev zlib1g-dev libexpat1-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxcb-randr0-dev libxcb-dri3-dev \
+            libxcb-present-dev libxcb-shm0-dev libxcb-sync-dev libxcb-xfixes0-dev \
+            libxshmfence-dev
+          python3 -m pip install --user --upgrade "meson>=1.4" ninja
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          meson --version
+          ninja --version
+
+      - name: Set up Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          add-to-path: true
+
+      - name: Shallow Mesa checkout at pinned commit
+        run: |
+          set -eu
+          COMMIT="$(python3 -c "import json;print(json.load(open('sources.lock'))['mesaCommit'])")"
+          mkdir -p work/mesa
+          cd work/mesa
+          git init -q .
+          git remote add origin https://gitlab.freedesktop.org/mesa/mesa.git
+          git fetch -q --depth 1 origin "$COMMIT"
+          git checkout -q --detach FETCH_HEAD
+          git rev-parse HEAD
+
+      - name: Fetch pinned Mesa
+        run: ./scripts/fetch-mesa.sh
+
+      - name: Apply patch series
+        run: ./scripts/apply-patches.sh --profile "${{ inputs.profile }}"
+
+      - name: Build pinned host codegen tools
+        run: |
+          set -eu
+          meson setup build/host-tools work/mesa \
+            -Dbuildtype=release -Dgallium-drivers= -Dvulkan-drivers=panfrost \
+            -Dplatforms= -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dopengl=false \
+            -Dgles1=disabled -Dgles2=disabled -Dmesa-clc=enabled -Dinstall-mesa-clc=true \
+            -Dprecomp-compiler=enabled -Dinstall-precomp-compiler=true \
+            -Dllvm=disabled -Dzstd=disabled
+          ninja -j"$PANVK_JOBS" -C build/host-tools \
+            src/compiler/clc/mesa_clc \
+            src/compiler/spirv/vtn_bindgen2 \
+            src/panfrost/clc/panfrost_compile
+          mkdir -p build/host-tools/bin
+          for p in src/compiler/clc/mesa_clc \
+                   src/compiler/spirv/vtn_bindgen2 \
+                   src/panfrost/clc/panfrost_compile; do
+            ln -sf "../$p" "build/host-tools/bin/$(basename "$p")"
+          done
+          build/host-tools/bin/mesa_clc --help >/dev/null 2>&1 || true
+          echo "HOST_TOOLS=$PWD/build/host-tools/bin" >> "$GITHUB_ENV"
+
+      - name: Build Android ICD
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+          PANVK_KBASE_RELEASE: ${{ inputs.release_string }}
+        run: |
+          ./scripts/build-android.sh \
+            --profile "${{ inputs.profile }}" \
+            --api "${{ inputs.api }}" \
+            --ndk "$ANDROID_NDK_ROOT"
+
+      - name: Static validation (Gate A)
+        run: ./scripts/validate-binary.sh --abi android "dist/android-${{ inputs.profile }}/libvulkan_panfrost.so"
+
+      - name: Collect artifacts
+        if: always()
+        run: |
+          set -eu
+          OUT="out"
+          mkdir -p "$OUT"
+          SO="dist/android-${{ inputs.profile }}/libvulkan_panfrost.so"
+          if [ -f "$SO" ]; then
+            cp "$SO" "$OUT/libvulkan_panfrost.so"
+            sha256sum "$OUT/libvulkan_panfrost.so" > "$OUT/SHA256SUMS.txt"
+            file "$OUT/libvulkan_panfrost.so"
+            readelf -d "$OUT/libvulkan_panfrost.so" | grep -i needed || true
+          fi
+          cp build/android-bionic.log "$OUT/build.log" 2>/dev/null || true
+          tail -n 100 build/android-bionic.log > "$OUT/build-tail.log" 2>/dev/null || true
+          printf 'profile=%s\napi=%s\nmesa=%s\n' \
+            "${{ inputs.profile }}" "${{ inputs.api }}" \
+            "$(python3 -c "import json;print(json.load(open('sources.lock'))['mesaCommit'])")" > "$OUT/BUILD-INFO.txt"
+
+      - name: Upload ICD + logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: panvk-${{ inputs.profile }}-${{ github.run_number }}
+          path: out/
+          if-no-files-found: warn
