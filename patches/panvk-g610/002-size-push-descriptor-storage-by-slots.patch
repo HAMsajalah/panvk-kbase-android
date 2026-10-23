@@ -1,0 +1,81 @@
+From 4b7d1e0c9a2f3b4d5e6f708192a3b4c5d6e7f809 Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Fri, 23 Oct 2026 22:40:00 +0700
+Subject: [PATCH panvk-g610 002] panvk: size the push descriptor storage by
+ slots, not by pushed descriptors
+
+A combined image sampler takes two descriptor slots (texture + sampler,
+panvk_get_desc_stride()), but maxPushDescriptors counts it as one, so a
+push of MAX_PUSH_DESCS combined image samplers needs 64 slots while the
+push set's storage was descs[MAX_PUSH_DESCS] (32).
+
+vkCmdPushDescriptorSetKHR then wrote 32 descriptors past the end of the
+push set allocation (the set itself, plus the meta save context's copy
+of set 0).  vktest 1.15 reports it as "bytes changed in memory next to
+the driver's allocations" for push.max_combined_image_samplers: 5520
+bytes.  The pushed 32 samplers themselves worked.
+
+Storage arrays are now MAX_PUSH_DESC_SLOTS (MAX_PUSH_DESCS * 2); the
+advertised VkPhysicalDevicePushDescriptorPropertiesKHR::
+maxPushDescriptors stays MAX_PUSH_DESCS.
+
+Co-Authored-By: the model 5.5 <noreply@anthropic.com>
+---
+ src/panfrost/vulkan/panvk_cmd_desc_state.h       | 2 +-
+ src/panfrost/vulkan/panvk_cmd_meta.h             | 4 ++--
+ src/panfrost/vulkan/panvk_descriptor_set_layout.h | 5 +++++
+ 3 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/src/panfrost/vulkan/panvk_cmd_desc_state.h b/src/panfrost/vulkan/panvk_cmd_desc_state.h
+index 9b82fc3..9debb42 100644
+--- a/src/panfrost/vulkan/panvk_cmd_desc_state.h
++++ b/src/panfrost/vulkan/panvk_cmd_desc_state.h
+@@ -54,7 +54,7 @@ panvk_shader_res_table_count(struct panvk_shader_desc_state *shader_desc_state)
+ struct panvk_push_set {
+    struct panvk_cmd_pool_obj base;
+    struct panvk_descriptor_set set;
+-   struct panvk_opaque_desc descs[MAX_PUSH_DESCS];
++   struct panvk_opaque_desc descs[MAX_PUSH_DESC_SLOTS];
+ };
+ 
+ struct panvk_descriptor_state {
+diff --git a/src/panfrost/vulkan/panvk_cmd_meta.h b/src/panfrost/vulkan/panvk_cmd_meta.h
+index 6d5f698..33eef1a 100644
+--- a/src/panfrost/vulkan/panvk_cmd_meta.h
++++ b/src/panfrost/vulkan/panvk_cmd_meta.h
+@@ -24,7 +24,7 @@ struct panvk_cmd_meta_compute_save_ctx {
+    } cs;
+    const struct panvk_descriptor_set *set0;
+    struct {
+-      struct panvk_opaque_desc desc_storage[MAX_PUSH_DESCS];
++      struct panvk_opaque_desc desc_storage[MAX_PUSH_DESC_SLOTS];
+       uint64_t descs_dev_addr;
+       uint32_t desc_count;
+       bool dirty;
+@@ -38,7 +38,7 @@ struct panvk_cmd_meta_graphics_save_ctx {
+    const struct panvk_graphics_pipeline *pipeline;
+    const struct panvk_descriptor_set *set0;
+    struct {
+-      struct panvk_opaque_desc desc_storage[MAX_PUSH_DESCS];
++      struct panvk_opaque_desc desc_storage[MAX_PUSH_DESC_SLOTS];
+       uint64_t descs_dev_addr;
+       uint32_t desc_count;
+       bool dirty;
+diff --git a/src/panfrost/vulkan/panvk_descriptor_set_layout.h b/src/panfrost/vulkan/panvk_descriptor_set_layout.h
+index 603a4c6..94d40df 100644
+--- a/src/panfrost/vulkan/panvk_descriptor_set_layout.h
++++ b/src/panfrost/vulkan/panvk_descriptor_set_layout.h
+@@ -23,6 +23,11 @@
+ #define MAX_DYNAMIC_UNIFORM_BUFFERS   16
+ #define MAX_DYNAMIC_STORAGE_BUFFERS   8
+ #define MAX_PUSH_DESCS                32
++/* A combined image sampler occupies two slots (texture + sampler) but counts
++ * as one pushed descriptor, so a full push of MAX_PUSH_DESCS needs twice the
++ * slots.  Storage arrays use this, maxPushDescriptors keeps MAX_PUSH_DESCS.
++ */
++#define MAX_PUSH_DESC_SLOTS           (MAX_PUSH_DESCS * 2)
+ #define MAX_INLINE_UNIFORM_BLOCK_SIZE (1 << 16)
+ #define MAX_DYNAMIC_BUFFERS                                                    \
+    (MAX_DYNAMIC_UNIFORM_BUFFERS + MAX_DYNAMIC_STORAGE_BUFFERS)
+-- 
+2.55.0
