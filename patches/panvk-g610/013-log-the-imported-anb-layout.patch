@@ -1,0 +1,57 @@
+From 7a013c0ffee1234567890abcdef1234567890ab Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Sat, 24 Oct 2026 13:25:00 +0700
+Subject: [PATCH panvk-g610 013] panvk: log the layout computed for imported ANB
+ images
+
+The ANB buffer is allocated by gralloc, so the only ground truth about
+its layout is what gralloc/SurfaceFlinger report (modifier 0x72 on this
+device) and what panvk computes.  Seven modifier values - linear,
+u-tiled, afbc 0x42, afbc-split, afbc-ytr, afbc-split-ytr (0x72, as
+SurfaceFlinger reports) and the 16x16 family - all leave the game black,
+so before guessing again, print the numbers panvk derived:
+
+  [P0A-V19-FULLPLANE] layout mod=0x... 2400x1080 hdr_row_stride=...
+    surface_stride=... size=... data_size=... wsi_pitch=... strict=...
+
+data_size should equal the imported dmabuf size (10608640 for this
+buffer).  If it does not, our AFBC layout is not what gralloc allocated
+and no modifier value can fix the presentation.
+
+Tested GPU: none (instrumentation only)
+Validation test: one line per imported swapchain image, data_size vs the
+  "anb import fd[i] size=" line printed just before it
+
+---
+diff --git a/src/panfrost/vulkan/panvk_image.c b/src/panfrost/vulkan/panvk_image.c
+index aeecd4a..a30114c 100644
+--- a/src/panfrost/vulkan/panvk_image.c
++++ b/src/panfrost/vulkan/panvk_image.c
+@@ -550,6 +550,25 @@ panvk_image_init_layouts(struct panvk_image *image,
+                             VK_ERROR_INITIALIZATION_FAILED);
+       }
+ 
++      /* panvk-kbase: the imported buffer was allocated by gralloc, so the
++       * only way to know whether our layout is the one gralloc used is to
++       * print what we computed next to the size we were given.
++       */
++      if (explicit_info && image->vk.drm_format_mod != DRM_FORMAT_MOD_LINEAR) {
++         const struct pan_image_layout *l = &pan_img->planes[pan_plane]->layout;
++         const struct pan_image_slice_layout *s = &l->slices[0];
++         mesa_logi("[P0A-V19-FULLPLANE] layout mod=0x%llx %ux%u hdr_row_stride=%u "
++                   "surface_stride=%llu size=%llu data_size=%llu wsi_pitch=%llu strict=%d",
++                   (unsigned long long)image->vk.drm_format_mod,
++                   image->vk.extent.width, image->vk.extent.height,
++                   s->afbc.header.row_stride_B,
++                   (unsigned long long)s->afbc.surface_stride_B,
++                   (unsigned long long)s->size_B,
++                   (unsigned long long)l->data_size_B,
++                   (unsigned long long)plane_layout.wsi_row_pitch_B,
++                   plane_layout.strict);
++      }
++
+       if (!is_disjoint(image) && !explicit_info)
+          plane_layout.offset_B += image->planes[plane].plane.layout.data_size_B;
+    }
+-- 
+2.55.0
