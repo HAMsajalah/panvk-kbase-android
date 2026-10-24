@@ -1,0 +1,102 @@
+From 5e1f9a3c7b2d40518293a4b5c6d7e8f901234567 Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Sat, 24 Oct 2026 10:55:00 +0700
+Subject: [PATCH panvk-g610 010] panvk/android: default the ANB fallback to AFBC
+
+A recompiled game on a vivo V2231 (Mali-G610 MC4) renders through
+VK_ANDROID_native_buffer and stays black, while the vendor driver shows
+it.  Evidence: the GPU is busy (mali interrupts +13568 in 5 s), the app
+runs its frame loop, and both the LINEAR and the U-interleaved fallback
+produce the exact same black output - a wrong tiling would give garbage,
+not a uniform black.
+
+The window buffers are allocated with usage 0xb00
+(HW_RENDER | HW_TEXTURE | HW_COMPOSER), which mali_gralloc serves as AFBC
+on this GPU.  The linear fallback writes plain pixels into that
+allocation, but SurfaceFlinger decodes it as AFBC and shows the header,
+which gralloc initialised to solid black.
+
+Default the fallback to AFBC 32x8 sparse (the first entry of
+PAN_SUPPORTED_MODIFIERS, i.e. what panvk itself allocates).
+PANVK_ANB_LAYOUT still overrides: linear, u-tiled, afbc-split, afbc-ytr,
+afbc-16x16, afbc-16x16-ytr.  The log now prints the chosen name and the
+modifier value:
+
+  anb_layout fallback afbc mod=0x... fmt=1 stride=1280 ...
+
+Tested GPU: none yet (Mali-G610 MC4 report only)
+Validation test: a Vulkan game on Mali-G610 shows its frames
+
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -355,27 +355,56 @@ vk_android_get_anb_layout(
+       if (native_buffer->handle && native_buffer->handle->numFds >= 1 &&
+           native_buffer->stride > 0 && bpp > 0 &&
+           vk_format_get_blockheight(pCreateInfo->format) == 1) {
+-         /* Window buffers are not always linear, and without the mapper the
+-          * modifier is unknowable: PANVK_ANB_LAYOUT=u-tiled selects Mali
+-          * 16x16 U-interleaved instead of LINEAR.
++         /* Without the gralloc mapper the modifier is unknowable, and gralloc
++          * allocates render+texture+composer window buffers as AFBC, so a
++          * linear guess makes SurfaceFlinger read the AFBC header (solid
++          * black) instead of the pixels the app just wrote.
++          * PANVK_ANB_LAYOUT=linear|u-tiled|afbc-split|afbc-ytr|afbc-16x16|
++          * afbc-16x16-ytr overrides the AFBC 32x8 sparse default.
+           */
++         static const struct {
++            const char *name;
++            uint64_t mod;
++         } anb_layouts[] = {
++            { "linear", DRM_FORMAT_MOD_LINEAR },
++            { "u-tiled", DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED },
++            { "afbc-split", DRM_FORMAT_MOD_ARM_AFBC(
++                 AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPARSE |
++                 AFBC_FORMAT_MOD_SPLIT) },
++            { "afbc-ytr", DRM_FORMAT_MOD_ARM_AFBC(
++                 AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPARSE |
++                 AFBC_FORMAT_MOD_YTR) },
++            { "afbc-16x16", DRM_FORMAT_MOD_ARM_AFBC(
++                 AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 | AFBC_FORMAT_MOD_TILED |
++                 AFBC_FORMAT_MOD_SC | AFBC_FORMAT_MOD_SPARSE) },
++            { "afbc-16x16-ytr", DRM_FORMAT_MOD_ARM_AFBC(
++                 AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 | AFBC_FORMAT_MOD_TILED |
++                 AFBC_FORMAT_MOD_SC | AFBC_FORMAT_MOD_SPARSE |
++                 AFBC_FORMAT_MOD_YTR) },
++         };
++         const uint64_t anb_mod = DRM_FORMAT_MOD_ARM_AFBC(
++            AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPARSE);
+          const char *layout = getenv("PANVK_ANB_LAYOUT");
+-         const bool tiled = (layout && (!strcmp(layout, "u-tiled") ||
+-                                        !strcmp(layout, "tiled"))) ||
+-                            access("/data/local/tmp/panvk_anb_utiled", F_OK) == 0;
++         uint64_t mod = anb_mod;
++         if (layout) {
++            for (unsigned i = 0; i < sizeof(anb_layouts) / sizeof(anb_layouts[0]); i++) {
++               if (!strcmp(layout, anb_layouts[i].name)) {
++                  mod = anb_layouts[i].mod;
++                  break;
++               }
++            }
++         }
+          memset(out, 0, sizeof(*out));
+          memset(out_layouts, 0, sizeof(*out_layouts) * max_planes);
+          out->sType =
+             VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT;
+          out->pPlaneLayouts = out_layouts;
+-         out->drmFormatModifier =
+-            tiled ? DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED
+-                  : DRM_FORMAT_MOD_LINEAR;
++         out->drmFormatModifier = mod;
+          out->drmFormatModifierPlaneCount = 1;
+          out_layouts[0].rowPitch = (uint64_t)native_buffer->stride * bpp;
+-         mesa_logi("[P0A-V19-FULLPLANE] anb_layout fallback %s fmt=%d "
+-                   "stride=%d bpp=%u rowPitch=%llu fds=%d",
+-                   tiled ? "U-TILED" : "LINEAR",
++         mesa_logi("[P0A-V19-FULLPLANE] anb_layout fallback %s mod=0x%llx "
++                   "fmt=%d stride=%d bpp=%u rowPitch=%llu fds=%d",
++                   layout ? layout : "afbc", (unsigned long long)mod,
+                    native_buffer->format, native_buffer->stride, bpp,
+                    (unsigned long long)out_layouts[0].rowPitch,
+                    native_buffer->handle->numFds);
+-- 
+2.55.0
