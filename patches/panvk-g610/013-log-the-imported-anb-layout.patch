@@ -27,7 +27,7 @@ diff --git a/src/panfrost/vulkan/panvk_image.c b/src/panfrost/vulkan/panvk_image
 index aeecd4a..a30114c 100644
 --- a/src/panfrost/vulkan/panvk_image.c
 +++ b/src/panfrost/vulkan/panvk_image.c
-@@ -550,6 +550,25 @@ panvk_image_init_layouts(struct panvk_image *image,
+@@ -604,6 +604,25 @@ panvk_image_init_layouts(struct panvk_image *image,
                              VK_ERROR_INITIALIZATION_FAILED);
        }
  
