@@ -1,0 +1,61 @@
+From 2b6d8e4f0a1c3b5d7e9f10293847566554433221 Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Sat, 24 Oct 2026 10:10:00 +0700
+Subject: [PATCH panvk-g610 009] panvk/android: select the ANB fallback layout
+ at run time
+
+With csf-v11 004/005/007 a recompiled game (io.github.nfsmwrecomp on a
+vivo V2231) imports its window buffers and renders (dumpsys gfxinfo:
+538 frames), and csf-v11 008 removed the per-frame
+QueueSignalReleaseImageANDROID failure, but the display stays black.
+The buffers are 1280x732 at stride 1280 (3747840 = 1280*732*4), so the
+size fits both LINEAR and Mali 16x16 U-interleaved: without the gralloc
+mapper the modifier cannot be read, and the linear guess may be wrong for
+gralloc window buffers.
+
+The fallback now declares DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED
+when PANVK_ANB_LAYOUT=u-tiled ("tiled" also accepted) or when
+/data/local/tmp/panvk_anb_utiled exists, which allows a root shell to
+A/B the layout of a stock app without touching its environment.  Linear
+stays the default and the log names the choice:
+
+  anb_layout fallback LINEAR|U-TILED fmt=1 stride=1280 ...
+
+Tested GPU: none yet (Mali-G610 MC4 report only)
+Validation test: a Vulkan game on Mali-G610 shows frames with one of the
+ two layouts
+
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -355,16 +355,27 @@ vk_android_get_anb_layout(
+       if (native_buffer->handle && native_buffer->handle->numFds >= 1 &&
+           native_buffer->stride > 0 && bpp > 0 &&
+           vk_format_get_blockheight(pCreateInfo->format) == 1) {
++         /* Window buffers are not always linear, and without the mapper the
++          * modifier is unknowable: PANVK_ANB_LAYOUT=u-tiled selects Mali
++          * 16x16 U-interleaved instead of LINEAR.
++          */
++         const char *layout = getenv("PANVK_ANB_LAYOUT");
++         const bool tiled = (layout && (!strcmp(layout, "u-tiled") ||
++                                        !strcmp(layout, "tiled"))) ||
++                            access("/data/local/tmp/panvk_anb_utiled", F_OK) == 0;
+          memset(out, 0, sizeof(*out));
+          memset(out_layouts, 0, sizeof(*out_layouts) * max_planes);
+          out->sType =
+             VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT;
+          out->pPlaneLayouts = out_layouts;
+-         out->drmFormatModifier = DRM_FORMAT_MOD_LINEAR;
++         out->drmFormatModifier =
++            tiled ? DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED
++                  : DRM_FORMAT_MOD_LINEAR;
+          out->drmFormatModifierPlaneCount = 1;
+          out_layouts[0].rowPitch = (uint64_t)native_buffer->stride * bpp;
+-         mesa_logi("[P0A-V19-FULLPLANE] anb_layout fallback LINEAR fmt=%d "
++         mesa_logi("[P0A-V19-FULLPLANE] anb_layout fallback %s fmt=%d "
+                    "stride=%d bpp=%u rowPitch=%llu fds=%d",
++                   tiled ? "U-TILED" : "LINEAR",
+                    native_buffer->format, native_buffer->stride, bpp,
+                    (unsigned long long)out_layouts[0].rowPitch,
+                    native_buffer->handle->numFds);
+-- 
+2.55.0
