@@ -10,8 +10,8 @@ environment variable, and four setprop tests all kept the AFBC default.
 
 os_get_option() reads the environment first and then, on Android, the
 vendor.mesa.<lowercase option> property - the same path the other
-PANVK_* knobs already use (the logs show Mesa looking up
-vendor.mesa.panvk.bc.mode).  With this, a root shell can A/B the ANB
+PANVK_* knobs use (the logs show Mesa looking up
+vendor.mesa.panvk.bc.mode).  With this a root shell can A/B the ANB
 layout of an unmodified app:
 
   adb shell su -c "setprop vendor.mesa.panvk.anb.layout afbc-16x16"
@@ -29,7 +29,7 @@ Validation test: the log line follows the property value
  #include "util/os_file.h"
  #include "util/u_gralloc/u_gralloc.h"
  
-@@ -383,7 +384,7 @@ vk_android_get_anb_layout(
+@@ -384,7 +385,7 @@ vk_android_get_anb_layout(
           };
           const uint64_t anb_mod = DRM_FORMAT_MOD_ARM_AFBC(
              AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPARSE);
@@ -38,5 +38,6 @@ Validation test: the log line follows the property value
           uint64_t mod = anb_mod;
           if (layout) {
              for (unsigned i = 0; i < sizeof(anb_layouts) / sizeof(anb_layouts[0]); i++) {
+
 -- 
 2.55.0
