@@ -1,0 +1,95 @@
+From 4c0ffee1234567890abcdef1234567890abcdef1 Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Sat, 24 Oct 2026 12:40:00 +0700
+Subject: [PATCH panvk-g610 012] panvk/android: use the modifier SurfaceFlinger
+ reports for ANB window buffers
+
+The ANB fallback still guessed the layout, and six of the seven knob
+values had never been A/B'd against the truth.  dumpsys SurfaceFlinger
+is running in a context that can load the gralloc mapper, and it prints
+the real thing for the game's window buffers:
+
+  name:SurfaceView[com.libertyrecomp/...]#1(BLAST Consumer)1,
+  size:10360.00KiB, w/h:2400x1080, usage: 0xb00, req fmt:1,
+  fourcc/mod:875708993/576460752303423602, compressed: true
+
+875708993 is fourcc 'AB24' (MTK AFBC RGBA8888) and
+576460752303423602 is 0x0800000000000072 = AFBC 32x8 | SPARSE | SPLIT |
+YTR.  The size checks out too: 10608640 B, exactly the dmabuf fd the
+driver imports.  Of the seven knob values only the 0x42/0x52/0x62
+families existed, and split+ytr (0x72) was not among them, so no A/B
+could have matched.
+
+Make 0x72 the default, add it as "afbc-split-ytr", keep the plain
+"afbc" (0x42) value reachable, and log the applied name instead of the
+raw option so a typo is visible.
+
+Tested GPU: Mali-G610 MC4 (vivo V2231, MTK6886) - value read back from
+SurfaceFlinger, not yet validated against a rendered frame
+Validation test: the game shows frames instead of black, and
+  adb logcat -d | grep "anb_layout fallback"
+prints "afbc-split-ytr mod=0x800000000000072"
+
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -356,8 +356,11 @@
+           * allocates render+texture+composer window buffers as AFBC, so a
+           * linear guess makes SurfaceFlinger read the AFBC header (solid
+           * black) instead of the pixels the app just wrote.
+-          * PANVK_ANB_LAYOUT=linear|u-tiled|afbc-split|afbc-ytr|afbc-16x16|
+-          * afbc-16x16-ytr overrides the AFBC 32x8 sparse default.
++          * dumpsys SurfaceFlinger names the real one for these buffers:
++          * fourcc AB24 (AFBC RGBA8888), mod 0x0800000000000072 = 32x8 |
++          * SPARSE | SPLIT | YTR, which is the default below.
++          * PANVK_ANB_LAYOUT=linear|u-tiled|afbc|afbc-split|afbc-ytr|
++          * afbc-split-ytr|afbc-16x16|afbc-16x16-ytr overrides it.
+           */
+          static const struct {
+             const char *name;
+@@ -365,12 +368,17 @@
+          } anb_layouts[] = {
+             { "linear", DRM_FORMAT_MOD_LINEAR },
+             { "u-tiled", DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED },
++            { "afbc", DRM_FORMAT_MOD_ARM_AFBC(
++                 AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPARSE) },
+             { "afbc-split", DRM_FORMAT_MOD_ARM_AFBC(
+                  AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPARSE |
+                  AFBC_FORMAT_MOD_SPLIT) },
+             { "afbc-ytr", DRM_FORMAT_MOD_ARM_AFBC(
+                  AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPARSE |
+                  AFBC_FORMAT_MOD_YTR) },
++            { "afbc-split-ytr", DRM_FORMAT_MOD_ARM_AFBC(
++                 AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPARSE |
++                 AFBC_FORMAT_MOD_SPLIT | AFBC_FORMAT_MOD_YTR) },
+             { "afbc-16x16", DRM_FORMAT_MOD_ARM_AFBC(
+                  AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 | AFBC_FORMAT_MOD_TILED |
+                  AFBC_FORMAT_MOD_SC | AFBC_FORMAT_MOD_SPARSE) },
+@@ -380,13 +388,16 @@
+                  AFBC_FORMAT_MOD_YTR) },
+          };
+          const uint64_t anb_mod = DRM_FORMAT_MOD_ARM_AFBC(
+-            AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPARSE);
++            AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPARSE |
++            AFBC_FORMAT_MOD_SPLIT | AFBC_FORMAT_MOD_YTR);
+          const char *layout = os_get_option("PANVK_ANB_LAYOUT");
+          uint64_t mod = anb_mod;
++         const char *mod_name = "afbc-split-ytr";
+          if (layout) {
+             for (unsigned i = 0; i < sizeof(anb_layouts) / sizeof(anb_layouts[0]); i++) {
+                if (!strcmp(layout, anb_layouts[i].name)) {
+                   mod = anb_layouts[i].mod;
++                  mod_name = anb_layouts[i].name;
+                   break;
+                }
+             }
+@@ -401,7 +412,7 @@
+          out_layouts[0].rowPitch = (uint64_t)native_buffer->stride * bpp;
+          mesa_logi("[P0A-V19-FULLPLANE] anb_layout fallback %s mod=0x%llx "
+                    "fmt=%d stride=%d bpp=%u rowPitch=%llu fds=%d",
+-                   layout ? layout : "afbc", (unsigned long long)mod,
++                   mod_name, (unsigned long long)mod,
+                    native_buffer->format, native_buffer->stride, bpp,
+                    (unsigned long long)out_layouts[0].rowPitch,
+                    native_buffer->handle->numFds);
+-- 
+2.55.0
