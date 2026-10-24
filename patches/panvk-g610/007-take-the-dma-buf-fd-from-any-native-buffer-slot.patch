@@ -1,0 +1,85 @@
+From 8a7b6c5d4e3f2019283746554433221100ffeedd Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Sat, 24 Oct 2026 08:00:00 +0700
+Subject: [PATCH panvk-g610 007] panvk/android: take the dma-buf fd from any
+ native buffer slot
+
+Full logcat from a vivo V2231 (Mali-G610 MC4, VulkanSamples 1.3) narrows
+the swapchain failure to one line:
+
+  [P0A-V19-FULLPLANE] mapper load failed (2 candidate names, first=common)
+  [P0A-V19-FULLPLANE] complete metadata unavailable rc=-95; refusing ...
+  u_gralloc_get_buffer_basic_info failed
+  [P0A-V19-FULLPLANE] anb_layout fallback LINEAR fmt=1 stride=1088 ...
+  GetMemoryFdPropertiesKHR failed
+  E VulkanSamples: createSwapchainKHR: ErrorInvalidExternalHandle
+
+The layout fallback works; the import then fails because
+vk_android_import_anb_memory() passes anb->handle->data[0] to
+GetMemoryFdPropertiesKHR, and on this ROM the gralloc handle carries
+three fds with the plane not at index 0 (panvk's kbase implementation
+rejects a fd it cannot lseek).  AHB imports already search for the
+dma-buf (panvk_android_find_dma_buf_fd); do the same here: try every fd
+in turn and keep the first the driver accepts, logging each fd's index,
+value, size and result under [P0A-V19-FULLPLANE].
+
+Tested GPU: none yet (Mali-G610 MC4 report only)
+Validation test: VulkanSamples createSwapchainKHR on Mali-G610
+
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -219,22 +219,45 @@ vk_android_import_anb_memory(struct vk_device *device,
+ {
+    assert(anb && anb->handle && anb->handle->numFds > 0);
+ 
+-   int dma_buf_fd = anb->handle->data[0];
+-
+    /* Query image memory requirements for size and supported memory types */
+    VkMemoryRequirements mem_reqs;
+    device->dispatch_table.GetImageMemoryRequirements(
+       (VkDevice)device, (VkImage)image, &mem_reqs);
+ 
++   /* The plane is not always data[0]: gralloc handles can carry extra fds
++    * (metadata, shared fd) ahead of it.  Take the first fd the driver accepts
++    * as a dma-buf, as panvk_android_find_dma_buf_fd() does for AHB imports.
++    */
+    VkMemoryFdPropertiesKHR fd_props = {
+       .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
+    };
+-   VkResult result = device->dispatch_table.GetMemoryFdPropertiesKHR(
+-      (VkDevice)device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+-      dma_buf_fd, &fd_props);
+-   if (result != VK_SUCCESS) {
++   int dma_buf_fd = -1;
++   VkResult result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
++   for (int i = 0; i < anb->handle->numFds; i++) {
++      const int fd = anb->handle->data[i];
++      const off_t size = fd >= 0 ? lseek(fd, 0, SEEK_END) : -1;
++      VkMemoryFdPropertiesKHR try_props = {
++         .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
++      };
++      const VkResult try_res =
++         fd >= 0 ? device->dispatch_table.GetMemoryFdPropertiesKHR(
++                      (VkDevice)device,
++                      VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd,
++                      &try_props)
++                 : VK_ERROR_INVALID_EXTERNAL_HANDLE;
++
++      mesa_logi("[P0A-V19-FULLPLANE] anb import fd[%d]=%d size=%lld res=%d", i,
++                fd, (long long)size, try_res);
++      if (try_res == VK_SUCCESS) {
++         dma_buf_fd = fd;
++         fd_props = try_props;
++         break;
++      }
++      result = try_res;
++   }
++   if (dma_buf_fd < 0) {
+       mesa_loge("GetMemoryFdPropertiesKHR failed");
+-      return result;
++      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+ 
+    uint32_t compatible_types = mem_reqs.memoryTypeBits & fd_props.memoryTypeBits;
+-- 
+2.55.0
