@@ -6,8 +6,8 @@ Subject: [PATCH panvk-g610 012] panvk/android: use the modifier SurfaceFlinger
 
 The ANB fallback still guessed the layout, and six of the seven knob
 values had never been A/B'd against the truth.  dumpsys SurfaceFlinger
-is running in a context that can load the gralloc mapper, and it prints
-the real thing for the game's window buffers:
+runs in a context that can load the gralloc mapper, and it prints the
+real thing for the game's window buffers:
 
   name:SurfaceView[com.libertyrecomp/...]#1(BLAST Consumer)1,
   size:10360.00KiB, w/h:2400x1080, usage: 0xb00, req fmt:1,
@@ -15,14 +15,14 @@ the real thing for the game's window buffers:
 
 875708993 is fourcc 'AB24' (MTK AFBC RGBA8888) and
 576460752303423602 is 0x0800000000000072 = AFBC 32x8 | SPARSE | SPLIT |
-YTR.  The size checks out too: 10608640 B, exactly the dmabuf fd the
-driver imports.  Of the seven knob values only the 0x42/0x52/0x62
-families existed, and split+ytr (0x72) was not among them, so no A/B
-could have matched.
+YTR.  The size matches the imported dmabuf exactly: 10608640 B, which is
+2400x1080x4 + 240640 B of AFBC header.  Of the seven knob values only
+the 0x42/0x52/0x62 families existed and split+ytr (0x72) was not one of
+them, so no A/B could have matched.
 
 Make 0x72 the default, add it as "afbc-split-ytr", keep the plain
 "afbc" (0x42) value reachable, and log the applied name instead of the
-raw option so a typo is visible.
+raw option so a typo in the property is visible.
 
 Tested GPU: Mali-G610 MC4 (vivo V2231, MTK6886) - value read back from
 SurfaceFlinger, not yet validated against a rendered frame
@@ -30,9 +30,12 @@ Validation test: the game shows frames instead of black, and
   adb logcat -d | grep "anb_layout fallback"
 prints "afbc-split-ytr mod=0x800000000000072"
 
+---
+diff --git a/src/vulkan/runtime/vk_android.c b/src/vulkan/runtime/vk_android.c
+index 3bdedf0..0fd1a8c 100644
 --- a/src/vulkan/runtime/vk_android.c
 +++ b/src/vulkan/runtime/vk_android.c
-@@ -356,8 +356,11 @@
+@@ -360,8 +360,11 @@ vk_android_get_anb_layout(
            * allocates render+texture+composer window buffers as AFBC, so a
            * linear guess makes SurfaceFlinger read the AFBC header (solid
            * black) instead of the pixels the app just wrote.
@@ -46,7 +49,7 @@ prints "afbc-split-ytr mod=0x800000000000072"
            */
           static const struct {
              const char *name;
-@@ -365,12 +368,17 @@
+@@ -369,12 +372,17 @@ vk_android_get_anb_layout(
           } anb_layouts[] = {
              { "linear", DRM_FORMAT_MOD_LINEAR },
              { "u-tiled", DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED },
@@ -64,7 +67,7 @@ prints "afbc-split-ytr mod=0x800000000000072"
              { "afbc-16x16", DRM_FORMAT_MOD_ARM_AFBC(
                   AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 | AFBC_FORMAT_MOD_TILED |
                   AFBC_FORMAT_MOD_SC | AFBC_FORMAT_MOD_SPARSE) },
-@@ -380,13 +388,16 @@
+@@ -384,13 +392,16 @@ vk_android_get_anb_layout(
                   AFBC_FORMAT_MOD_YTR) },
           };
           const uint64_t anb_mod = DRM_FORMAT_MOD_ARM_AFBC(
@@ -82,7 +85,7 @@ prints "afbc-split-ytr mod=0x800000000000072"
                    break;
                 }
              }
-@@ -401,7 +412,7 @@
+@@ -405,7 +416,7 @@ vk_android_get_anb_layout(
           out_layouts[0].rowPitch = (uint64_t)native_buffer->stride * bpp;
           mesa_logi("[P0A-V19-FULLPLANE] anb_layout fallback %s mod=0x%llx "
                     "fmt=%d stride=%d bpp=%u rowPitch=%llu fds=%d",
