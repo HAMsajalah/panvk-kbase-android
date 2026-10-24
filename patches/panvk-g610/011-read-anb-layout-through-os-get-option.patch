@@ -1,0 +1,42 @@
+From 7c3a5b9e1d2f40618293a4b5c6d7e8f901234567 Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Sat, 24 Oct 2026 11:20:00 +0700
+Subject: [PATCH panvk-g610 011] panvk/android: read PANVK_ANB_LAYOUT through
+ os_get_option
+
+csf-v11/009 read the ANB layout knob with getenv(), so the documented
+system property had no effect: a stock app cannot be given an
+environment variable, and four setprop tests all kept the AFBC default.
+
+os_get_option() reads the environment first and then, on Android, the
+vendor.mesa.<lowercase option> property - the same path the other
+PANVK_* knobs already use (the logs show Mesa looking up
+vendor.mesa.panvk.bc.mode).  With this, a root shell can A/B the ANB
+layout of an unmodified app:
+
+  adb shell su -c "setprop vendor.mesa.panvk.anb.layout afbc-16x16"
+
+Tested GPU: none (knob plumbing only)
+Validation test: the log line follows the property value
+
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -39,6 +39,7 @@
+ #include "drm-uapi/drm_fourcc.h"
+ #include "util/libsync.h"
+ #include "util/log.h"
++#include "util/os_misc.h"
+ #include "util/os_file.h"
+ #include "util/u_gralloc/u_gralloc.h"
+ 
+@@ -383,7 +384,7 @@ vk_android_get_anb_layout(
+          };
+          const uint64_t anb_mod = DRM_FORMAT_MOD_ARM_AFBC(
+             AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPARSE);
+-         const char *layout = getenv("PANVK_ANB_LAYOUT");
++         const char *layout = os_get_option("PANVK_ANB_LAYOUT");
+          uint64_t mod = anb_mod;
+          if (layout) {
+             for (unsigned i = 0; i < sizeof(anb_layouts) / sizeof(anb_layouts[0]); i++) {
+-- 
+2.55.0
