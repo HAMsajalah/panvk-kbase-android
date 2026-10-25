@@ -27,7 +27,7 @@ Mesa base range: 5a07217f034b3e50d8c7c7794f97a2df1742613b
 diff --git a/src/panfrost/vulkan/panvk_shader.h b/src/panfrost/vulkan/panvk_shader.h
 --- a/src/panfrost/vulkan/panvk_shader.h
 +++ b/src/panfrost/vulkan/panvk_shader.h
-@@ -29,3 +29,3 @@
+@@ -35,3 +35,3 @@
  #define MAX_RTS 8
 -#define MAX_VS_ATTRIBS 16
 +#define MAX_VS_ATTRIBS 32

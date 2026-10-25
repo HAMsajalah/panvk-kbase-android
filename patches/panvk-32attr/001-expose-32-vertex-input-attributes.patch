@@ -9,14 +9,15 @@ minimum of 16 (MAX_VBS), our own bookkeeping limit: the Mali hardware
 supports up to 2^9 vertex attributes.  D3D11 - and therefore DXVK - wants
 32 input elements.
 
-Bisect note (v0.3.8): the earlier revision of this patch also widened
-MAX_VS_ATTRIBS (the MALI_ATTRIBUTE slots reserved in the VS driver set) to
-32 and widened pan_shader_info::attributes_read to 64 bits.  With that
-revision the whole frame rendered black on Mali-G610 (v0.3.5/v0.3.6),
-while dropping the family (v0.3.7, 16/16) renders the scene.  This revision
-keeps only the advertised limits at 32 and leaves MAX_VS_ATTRIBS at 16, to
-tell "app uses >16 attributes" apart from "32-slot attribute table breaks
-the VS driver set".
+Bisect note: advertising 32 while keeping MAX_VS_ATTRIBS at 16 (v0.3.8)
+made the frame black with the game nearly hanging: the app builds pipelines
+whose vertex shaders read locations 16..31, and those MALI_ATTRIBUTE
+descriptors did not exist.  Widening MAX_VS_ATTRIBS to 32 alone (v0.3.5/
+v0.3.6) was black too, because panvk_vX_nir_lower_descriptors.c hardcodes
+the VS dummy-sampler index to 16 while prepare_vs_driver_set() places it
+after the attribute table - every VS UBO/SSBO/texture handle ended up off
+by MAX_VS_ATTRIBS - 16 entries.  panvk-g610/016 fixes that and reserves
+the 32 slots.
 
 Tested GPU: none yet (compile-level)
 Mesa base range: 5a07217f034b3e50d8c7c7794f97a2df1742613b
