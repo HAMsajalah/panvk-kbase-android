@@ -1,58 +1,30 @@
+From 4b7d1e0c9a2f3b4d5e6f708192a3b4c5d6e7f809 Mon Sep 17 00:00:00 2001
 From: panvk-kbase-android worker <panvk-worker@localhost>
-Subject: [PATCH panvk-32attr 001] panvk: expose 32 vertex input attributes
-Generated-by: LLM
+Date: Fri, 23 Oct 2026 22:40:00 +0700
+Subject: [PATCH panvk-32attr 001] panvk: advertise 32 vertex input
+ attributes and bindings
 
-Purpose: maxVertexInputAttributes/maxVertexInputBindings were pinned to the
- Vulkan minimum of 16 (MAX_VBS), which is our own bookkeeping limit: the Mali
- hardware supports up to 2^9 vertex attributes (see the comment above
- .maxVertexInputAttributes in panvk_vX_physical_device.c).  D3D11 - and
- therefore DXVK - needs 32 input elements, so games that use more than 16
- attributes could not create a pipeline.
- .
- Raise MAX_VBS (bindings + attribute table, including the duplicate in
- csf/panvk_cmd_buffer.h) and MAX_VS_ATTRIBS (MALI_ATTRIBUTE slots reserved in
- the VS driver set, images follow them on pre-Valhall) to 32, and allow vertex
- shader input locations up to MAX_VS_ATTRIBS.  Widen
- pan_shader_info::attributes_read to 64 bits (it holds the NIR inputs_read
- mask, whose generic-attribute bits start at VERT_ATTRIB_GENERIC0 = 16, so
- locations 16-31 live above bit 31), which also makes the Bifrost
- attribute_count computation correct for sparse high locations.
- .
- Nothing is spoofed: the attribute descriptors are actually emitted for all
- 32 locations on CSF (prepare_vs_driver_set loops over MAX_VS_ATTRIBS and
- vk_vertex_input_state supports 32 attributes), the limit reported to
- applications matches what the driver implements.
- .
- This patch is applied after the complete universal series
- (csf-v11 + jm-v9 + jm-v7) validated by upstream RC5-universal (v10 probes
- 36/36-39/39 on Mali-G610/G710).  It is carried in its own family because
- csf-v11/092 has MAX_VS_ATTRIBS 16 as hunk context and would not apply after
- this change.
-Source/Reference: Mesa 5a07217f034b3e50d8c7c7794f97a2df1742613b,
- src/panfrost/vulkan/panvk_cmd_draw.h (MAX_VBS),
- src/panfrost/vulkan/csf/panvk_cmd_buffer.h (duplicate MAX_VBS),
- src/panfrost/vulkan/panvk_shader.h (MAX_VS_ATTRIBS),
- src/panfrost/vulkan/csf/panvk_vX_cmd_draw.c (prepare_vs_driver_set),
- src/panfrost/compiler/pan_compiler.h (attributes_read)
+maxVertexInputAttributes/maxVertexInputBindings were pinned to the Vulkan
+minimum of 16 (MAX_VBS), our own bookkeeping limit: the Mali hardware
+supports up to 2^9 vertex attributes.  D3D11 - and therefore DXVK - wants
+32 input elements.
+
+Bisect note (v0.3.8): the earlier revision of this patch also widened
+MAX_VS_ATTRIBS (the MALI_ATTRIBUTE slots reserved in the VS driver set) to
+32 and widened pan_shader_info::attributes_read to 64 bits.  With that
+revision the whole frame rendered black on Mali-G610 (v0.3.5/v0.3.6),
+while dropping the family (v0.3.7, 16/16) renders the scene.  This revision
+keeps only the advertised limits at 32 and leaves MAX_VS_ATTRIBS at 16, to
+tell "app uses >16 attributes" apart from "32-slot attribute table breaks
+the VS driver set".
+
 Tested GPU: none yet (compile-level)
-Tested Kbase UAPI: n/a
 Mesa base range: 5a07217f034b3e50d8c7c7794f97a2df1742613b
-Dependencies: csf-v11 + jm-v9 + jm-v7 (must be the last family applied)
-Validation test: panvk-test vertex attribute stress with 32 locations
+---
+ src/panfrost/vulkan/csf/panvk_cmd_buffer.h | 2 +-
+ src/panfrost/vulkan/panvk_cmd_draw.h       | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
 
-diff --git a/src/panfrost/compiler/pan_compiler.h b/src/panfrost/compiler/pan_compiler.h
-index b71fac1..2408d66 100644
---- a/src/panfrost/compiler/pan_compiler.h
-+++ b/src/panfrost/compiler/pan_compiler.h
-@@ -543,7 +543,7 @@ struct pan_shader_info {
-    unsigned ubo_count;
-    unsigned attributes_read_count;
-    unsigned attribute_count;
--   unsigned attributes_read;
-+   uint64_t attributes_read;
-    uint64_t images_used;
- 
-    struct {
 diff --git a/src/panfrost/vulkan/csf/panvk_cmd_buffer.h b/src/panfrost/vulkan/csf/panvk_cmd_buffer.h
 index c1c24d6..6c8a2bc 100644
 --- a/src/panfrost/vulkan/csf/panvk_cmd_buffer.h
@@ -67,66 +39,17 @@ index c1c24d6..6c8a2bc 100644
  #if PAN_ARCH >= 14
  #define MAX_LAYERS_PER_TILER_DESC 256
 diff --git a/src/panfrost/vulkan/panvk_cmd_draw.h b/src/panfrost/vulkan/panvk_cmd_draw.h
-index 9943277..d56a73d 100644
+index 9943277..91b1c2d 100644
 --- a/src/panfrost/vulkan/panvk_cmd_draw.h
 +++ b/src/panfrost/vulkan/panvk_cmd_draw.h
-@@ -27,7 +27,11 @@
+@@ -27,7 +27,7 @@
  #include "pan_fb.h"
  #include "pan_props.h"
  
 -#define MAX_VBS 16
-+/* The hardware supports up to 2^9 vertex attributes/bindings, only our own
-+ * bookkeeping limits this.  Expose 32 attributes, which is what D3D11
-+ * (and therefore DXVK) needs, instead of the Vulkan minimum of 16.
-+ */
 +#define MAX_VBS 32
  
  #if PAN_ARCH < 10
  #define MAX_FRAMEBUFFER_DIMENSION (1 << 14)
-diff --git a/src/panfrost/vulkan/panvk_shader.h b/src/panfrost/vulkan/panvk_shader.h
-index bf2904f..0bea0ae 100644
---- a/src/panfrost/vulkan/panvk_shader.h
-+++ b/src/panfrost/vulkan/panvk_shader.h
-@@ -33,7 +33,12 @@ struct panvk_device;
- VkResult panvk_per_arch(create_depth_bounds_fs)(struct panvk_device *dev);
- 
- #define MAX_RTS 8
--#define MAX_VS_ATTRIBS 16
-+/* Number of MALI_ATTRIBUTE slots reserved at the start of the VS attribute
-+ * table (images are placed right after this range on pre-Valhall).  The
-+ * hardware supports up to 2^9 attributes, so 32 is a safe software limit and
-+ * matches the D3D11 limit.
-+ */
-+#define MAX_VS_ATTRIBS 32
- 
- #if PAN_ARCH < 9
- 
-diff --git a/src/panfrost/vulkan/panvk_vX_shader.c b/src/panfrost/vulkan/panvk_vX_shader.c
-index 03ce28c..963e7f3 100644
---- a/src/panfrost/vulkan/panvk_vX_shader.c
-+++ b/src/panfrost/vulkan/panvk_vX_shader.c
-@@ -3085,11 +3085,11 @@ panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
-        * opposite. Patch attribute_count accordingly, so
-        * pan_shader_prepare_rsd() does what we expect.
-        */
--      uint32_t gen_attribs =
--         (shader->info.attributes_read & VERT_BIT_GENERIC_ALL) >>
--         VERT_ATTRIB_GENERIC0;
-+      uint64_t gen_attribs =
-+         (shader->info.attributes_read >> VERT_ATTRIB_GENERIC0) &
-+         BITFIELD64_MASK(MAX_VS_ATTRIBS);
- 
--      shader->info.attribute_count = util_last_bit(gen_attribs);
-+      shader->info.attribute_count = util_last_bit64(gen_attribs);
- 
-       /* NULL IDVS shaders are not allowed. */
-       if (!bin_size)
-@@ -3555,7 +3555,7 @@ panvk_compile_shader(struct panvk_device *dev,
- #endif
-             nir_foreach_shader_in_variable(var, nir) {
-                assert(var->data.location >= VERT_ATTRIB_GENERIC0 &&
--                      var->data.location <= VERT_ATTRIB_GENERIC15);
-+                      var->data.location < VERT_ATTRIB_GENERIC0 + MAX_VS_ATTRIBS);
-                var->data.driver_location =
-                   var->data.location - VERT_ATTRIB_GENERIC0;
-             }
+-- 
+2.55.0
