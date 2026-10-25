@@ -30,7 +30,7 @@ if [ "$PROFILE" = "g615-v11-csf" ]; then SERIES="$SERIES jm-v9 jm-v7"; fi
 # the 32-attribute patch last (csf-v11/092 has MAX_VS_ATTRIBS 16 as context),
 # then the G610 fix-ups (patches/panvk-g610).
 if [ "$PROFILE" = "g610-v10-csf" ]; then
-  SERIES="$SERIES jm-v9 jm-v7 panvk-g610"
+  SERIES="$SERIES jm-v9 jm-v7 panvk-32attr panvk-g610"
 fi
 echo "profile=$PROFILE arch=$ARCH frontend=$FRONTEND series: $SERIES"
 git -C "$MESA" status --porcelain | head -n 5
