@@ -1,0 +1,193 @@
+From 4d014f1112223334445556667778889990001112 Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Sun, 25 Oct 2026 20:15:00 +0700
+Subject: [PATCH panvk-g610 014] panvk/android: paint the ANB image magenta on
+ present, and log every handle fd
+
+The GTA IV run renders (gta4-draw-census: commands=888 draws=845), the
+game presents (SurfaceFlinger frame counter advances ~120 frames in 4 s),
+the AFBC layout panvk derives matches the gralloc dmabuf byte for byte
+(data_size 10608000 -> 10608640 after page rounding), and every modifier
+value from linear to afbc-split-ytr leaves the screen black.  HWC
+composites that layer itself (composition=DEVICE), so neither HWC-off
+nor a screenshot can tell us whether the pixels exist in the buffer.
+
+Two facts are still unknown, and guessing has cost six builds:
+ 1. do the app's own writes into the imported ANB image land at all,
+ 2. is the fd we import really the buffer SurfaceFlinger presents?
+
+So add two diagnostics, both off unless the property is set:
+
+  adb shell su -c "setprop vendor.mesa.panvk.anb.fill 1"
+
+makes vkQueueSignalReleaseImageANDROID wait for the app's rendering to
+finish, clear the whole swapchain image to magenta on the GPU and wait
+again, so the next screenshot is decisive: magenta means our GPU writes
+do reach the displayed buffer and the app is drawing black, black means
+the app and the display look at different memory.
+
+Independently, vk_android_import_anb_memory() now logs every fd of the
+native handle (not only the first one the driver accepts) together with
+its /proc/self/fd readlink target, so a dma-buf ("dmabuf") can be told
+apart from the extra socket/sync fds MediaTek gralloc keeps in the same
+handle.  The fill line also prints the image usage, because a missing
+VK_IMAGE_USAGE_TRANSFER_DST_BIT would make the clear a no-op.
+
+Tested GPU: none (diagnostics only, default off)
+Validation test: with the property set the game area turns magenta, and
+  logcat shows "anb import fd[i] ... link=..." for every fd
+
+---
+diff --git a/src/vulkan/runtime/vk_android.c b/src/vulkan/runtime/vk_android.c
+index 0fd1a8c..5aab55f 100644
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -53,6 +53,7 @@
+ #endif
+ 
+ #include <unistd.h>
++#include <stdio.h>
+ #include <sys/ioctl.h>
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+@@ -247,14 +248,24 @@ vk_android_import_anb_memory(struct vk_device *device,
+                       &try_props)
+                  : VK_ERROR_INVALID_EXTERNAL_HANDLE;
+ 
+-      mesa_logi("[P0A-V19-FULLPLANE] anb import fd[%d]=%d size=%lld res=%d", i,
+-                fd, (long long)size, try_res);
+-      if (try_res == VK_SUCCESS) {
++      /* Which fd is which matters: a dma-buf readlinks to "dmabuf" and takes
++       * lseek, a sync_file does not.  Log every fd, not only the first
++       * accepted one, so the handle layout is visible in the log. */
++      char path[32], link[64] = "?";
++      ssize_t link_len = -1;
++      snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
++      if (fd >= 0 && (link_len = readlink(path, link, sizeof(link) - 1)) >= 0)
++         link[link_len] = '\0';
++
++      mesa_logi("[P0A-V19-FULLPLANE] anb import fd[%d]=%d size=%lld res=%d "
++                "link=%s",
++                i, fd, (long long)size, try_res, link);
++      if (try_res == VK_SUCCESS && dma_buf_fd < 0) {
+          dma_buf_fd = fd;
+          fd_props = try_props;
+-         break;
++      } else if (try_res != VK_SUCCESS) {
++         result = try_res;
+       }
+-      result = try_res;
+    }
+    if (dma_buf_fd < 0) {
+       mesa_loge("GetMemoryFdPropertiesKHR failed");
+@@ -675,6 +686,98 @@ vk_anb_semaphore_init_once(struct vk_queue *queue, struct vk_device *device)
+                                                  &queue->anb_semaphore);
+ }
+ 
++/* Diagnostic only, enabled with:
++ *   adb shell su -c "setprop vendor.mesa.panvk.anb.fill 1"
++ *
++ * After the app's rendering into the ANB image has completed, clear the whole
++ * image to magenta and wait for it.  A magenta screenshot means our GPU writes
++ * do reach the buffer SurfaceFlinger displays; a still-black screenshot means
++ * the app and the display are looking at different memory.
++ */
++static void
++vk_anb_debug_fill(VkQueue _queue, struct vk_device *device, VkImage image)
++{
++   static int enabled = -1;
++   static VkCommandPool pool;
++   static VkCommandBuffer cmd;
++   static unsigned fills;
++
++   if (enabled < 0)
++      enabled = os_get_option("PANVK_ANB_FILL") != NULL;
++   if (!enabled)
++      return;
++
++   const struct vk_device_dispatch_table *dt = &device->dispatch_table;
++   VkDevice dev = vk_device_to_handle(device);
++   VK_FROM_HANDLE(vk_queue, q, _queue);
++   VK_FROM_HANDLE(vk_image, vk_img, image);
++
++   if (pool == VK_NULL_HANDLE) {
++      const VkCommandPoolCreateInfo pool_info = {
++         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
++         .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
++         .queueFamilyIndex = q->queue_family_index,
++      };
++      VkResult res = dt->CreateCommandPool(dev, &pool_info, NULL, &pool);
++      if (res != VK_SUCCESS) {
++         mesa_loge("[P0A-V19-FILL] CreateCommandPool failed res=%d", (int)res);
++         enabled = 0;
++         return;
++      }
++      const VkCommandBufferAllocateInfo cmd_info = {
++         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
++         .commandPool = pool,
++         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
++         .commandBufferCount = 1,
++      };
++      res = dt->AllocateCommandBuffers(dev, &cmd_info, &cmd);
++      if (res != VK_SUCCESS) {
++         mesa_loge("[P0A-V19-FILL] AllocateCommandBuffers failed res=%d", (int)res);
++         enabled = 0;
++         return;
++      }
++   }
++
++   /* The release submit above already waited on the app's render semaphores,
++    * so an idle queue means the app is done drawing into this image. */
++   VkResult res = dt->QueueWaitIdle(_queue);
++   if (res == VK_SUCCESS) {
++      const VkCommandBufferBeginInfo begin_info = {
++         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
++         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
++      };
++      const VkImageSubresourceRange range = {
++         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
++         .levelCount = VK_REMAINING_MIP_LEVELS,
++         .layerCount = VK_REMAINING_ARRAY_LAYERS,
++      };
++      const VkClearColorValue magenta = {
++         .float32 = { 1.0f, 0.0f, 1.0f, 1.0f },
++      };
++      const VkSubmitInfo submit_info = {
++         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
++         .commandBufferCount = 1,
++         .pCommandBuffers = &cmd,
++      };
++
++      dt->BeginCommandBuffer(cmd, &begin_info);
++      dt->CmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_GENERAL, &magenta, 1,
++                             &range);
++      dt->EndCommandBuffer(cmd);
++      res = dt->QueueSubmit(_queue, 1, &submit_info, VK_NULL_HANDLE);
++      if (res == VK_SUCCESS)
++         res = dt->QueueWaitIdle(_queue);
++   }
++
++   if ((fills++ % 120) == 0 || res != VK_SUCCESS)
++      mesa_logi("[P0A-V19-FILL] magenta clear of the anb image res=%d fills=%u "
++                "usage=0x%llx fmt=%d %ux%u", (int)res, fills,
++                (unsigned long long)vk_img->usage, vk_img->format,
++                vk_img->extent.width, vk_img->extent.height);
++   if (res != VK_SUCCESS)
++      enabled = 0;
++}
++
+ VKAPI_ATTR VkResult VKAPI_CALL
+ vk_common_QueueSignalReleaseImageANDROID(VkQueue _queue,
+                                          uint32_t waitSemaphoreCount,
+@@ -728,6 +831,8 @@ vk_common_QueueSignalReleaseImageANDROID(VkQueue _queue,
+    if (result != VK_SUCCESS)
+       return result;
+ 
++   vk_anb_debug_fill(_queue, device, image);
++
+    const VkSemaphoreGetFdInfoKHR get_fd = {
+       .sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR,
+       .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+
+-- 
+2.55.0
