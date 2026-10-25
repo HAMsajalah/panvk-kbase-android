@@ -1,20 +1,18 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: abhay-byte <abhay02delhi@gmail.com>
 Date: Fri, 16 Oct 2026 14:30:00 +0530
-Subject: [PATCH] gralloc: compile the HIDL mapper4 backend out by default
+Subject: [PATCH] gralloc: keep the HIDL mapper4 backend enabled on aarch64
 
-The HIDL IMapper@4.0 raw-vtable backend added by 014 is unreachable from
-app linker namespaces (vendor mapper@4.0-impl and libvndksupport are
-refused, isDeclared is SELinux-denied) and calls one vendor's frozen
-aarch64 libc++ ABI by vtable slot number, an ABI risk for no benefit
-inside apps. Nothing else depends on it: backend 4 only feeds the same
-decoder, and the owned-AHB fallback (wsi/017) covers apps.
+The HIDL IMapper@4.0 raw-vtable backend added by 014 was compiled out by
+default here. On the vivo V2231 (MTK6886) that is exactly wrong: RC3
+(which had it enabled) logs "init backend=hidl-mapper4 name=mediatek
+how=SPHAL" inside the app namespace, reads the real gralloc metadata
+(fourcc AB24, modifier 0x72, alloc 10608640) and renders; with it
+compiled out, the vendor-neutral AIMapper load fails with -ENOTSUP (-95),
+panvk refuses the guessed layout and the screen stays black.
 
-Compile it out by default. PANVK_V19_HIDL is defined only with
--DPANVK_GRALLOC_HIDL_MAPPER4 (aarch64), for standalone tools that run in
-the vendor namespace. Without it, the mapper4-impl library names are no
-longer collected as AIMapper candidates and a failed AIMapper load ends
-in the existing "mapper load failed" warning and -ENOTSUP.
+Keep it enabled on aarch64. The frozen libc++ ABI risk stays, but a
+working mapper beats a guessed layout.
 
 Build-only; not device-tested.
 
@@ -31,16 +29,16 @@ index 0437db4..3630434 100644
     __attribute__((aligned(16))) uint32_t version;
     struct panvk_v19_mapper_v5 v5;
  };
-+/* The HIDL IMapper@4.0 raw-vtable backend below is off by default: it is
-+ * unreachable from app linker namespaces on every device seen so far (the
-+ * vendor mapper@4.0-impl and libvndksupport are refused, and the
-+ * isDeclared lookup is SELinux-denied) and it depends on the frozen
-+ * aarch64 libc++ ABI of one vendor implementation. Apps use the verified
-+ * owned-AHB fallback (vk_android_get_ahb_layout) instead. Build with
-+ * -DPANVK_GRALLOC_HIDL_MAPPER4 to enable it for standalone tools that run
-+ * in the vendor namespace.
++/* The HIDL IMapper@4.0 raw-vtable backend is ENABLED on aarch64 by default:
++ * on this vivo V2231 (MTK6886) it does load inside the app namespace, and
++ * PanVK-kbase RC3 logs "init backend=hidl-mapper4 name=mediatek how=SPHAL"
++ * then reads the real gralloc metadata (fourcc AB24, modifier 0x72, alloc
++ * 10608640) and renders. Compiling it out left panvk on the vendor-neutral
++ * AIMapper path, which fails with -ENOTSUP (-95), so panvk fell back to a
++ * guessed layout and the screen stayed black. Keep the frozen-vtable ABI
++ * risk; a working mapper beats a guessed layout.
 + */
-+#if defined(__aarch64__) && defined(PANVK_GRALLOC_HIDL_MAPPER4)
++#if defined(__aarch64__)
 +#define PANVK_V19_HIDL 1
 +#endif
 +
