@@ -86,14 +86,6 @@ jobs:
       - name: Apply patch series
         run: ./scripts/apply-patches.sh --profile "${{ inputs.profile }}"
 
-      - name: Dump VS shader region (diagnostic, temporary)
-        run: |
-          F=work/mesa/src/panfrost/vulkan/panvk_vX_shader.c
-          echo '=== includes ==='; sed -n '20,36p' $F
-          echo '=== target block ==='; sed -n '3520,3570p' $F
-          grep -n 'We need the driver_location' $F || true
-          grep -n 'util/u_memory.h' $F || true
-          exit 1
       - name: Build SPIRV-Tools 2024.4
         run: |
           set -eu

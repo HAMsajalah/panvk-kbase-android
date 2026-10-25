@@ -5,7 +5,7 @@ Subject: [PATCH panvk-g610 015] panvk/shader: log the vertex inputs each VS
  reads
 
 The app rejects its 3D pipelines with reason=vertex-input-location-limit
-when maxVertexInputAttributes < 32, so we have to expose 32.  Before
+when maxVertexInputAttributes < 32, so 32 has to be exposed.  Before
 changing the attribute path we need to know whether those shaders read at
 most 16 distinct locations (they can then be compacted into the 16
 hardware MALI_ATTRIBUTE slots) or really need more than 16 at once.
@@ -14,43 +14,41 @@ Logs, per vertex shader:
 
   [P0A-V19-INPUTS] vs inputs=<count> max_location=<n> mask=0x<hex>
 
-input locations are relative to VERT_ATTRIB_GENERIC0.
+Locations are relative to VERT_ATTRIB_GENERIC0.
 
 Diagnostic only.
 ---
- src/panfrost/vulkan/panvk_vX_shader.c | 20 ++++++++++++++++++++
- 1 file changed, 20 insertions(+)
+ src/panfrost/vulkan/panvk_vX_shader.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
 
 diff --git a/src/panfrost/vulkan/panvk_vX_shader.c b/src/panfrost/vulkan/panvk_vX_shader.c
 --- a/src/panfrost/vulkan/panvk_vX_shader.c
 +++ b/src/panfrost/vulkan/panvk_vX_shader.c
-@@ -24,4 +24,5 @@
+@@ -30,3 +30,4 @@
  #include "spirv/nir_spirv.h"
 +#include "util/log.h"
  #include "util/memstream.h"
  #include "util/mesa-blake3.h"
- #include "util/shader_stats.h"
-@@ -1464,6 +1465,21 @@
-          }
- #endif
+@@ -3547,5 +3548,20 @@
  
-+          {
-+             uint64_t in_mask = 0;
-+             unsigned in_count = 0, in_max = 0;
-+             nir_foreach_shader_in_variable(var, nir) {
-+                unsigned rel = var->data.location - VERT_ATTRIB_GENERIC0;
-+                in_count++;
-+                in_max = MAX2(in_max, rel);
-+                if (rel < 64)
-+                   in_mask |= 1ull << rel;
-+             }
-+             if (nir->info.stage == MESA_SHADER_VERTEX)
-+                mesa_logi("[P0A-V19-INPUTS] vs inputs=%u max_location=%u mask=0x%016llx",
-+                          in_count, in_max, (unsigned long long)in_mask);
-+          }
++         {
++            uint64_t in_mask = 0;
++            unsigned in_count = 0, in_max = 0;
++            nir_foreach_shader_in_variable(var, nir) {
++               unsigned rel = var->data.location - VERT_ATTRIB_GENERIC0;
++               in_count++;
++               in_max = MAX2(in_max, rel);
++               if (rel < 64)
++                  in_mask |= 1ull << rel;
++            }
++            if (nir->info.stage == MESA_SHADER_VERTEX)
++               mesa_logi("[P0A-V19-INPUTS] vs inputs=%u max_location=%u mask=0x%016llx",
++                         in_count, in_max, (unsigned long long)in_mask);
++         }
 +
           /* We need the driver_location to match the vertex attribute
            * location, so we can use the attribute layout described by
            * vk_vertex_input_state where there are holes in the attribute
+           * locations.
 -- 
 2.55.0
