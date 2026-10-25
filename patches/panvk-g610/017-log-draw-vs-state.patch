@@ -1,0 +1,66 @@
+From 7d1e2f3a4b5c6d7e8f9012345678abcdef012345 Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Mon, 26 Oct 2026 01:10:00 +0700
+Subject: [PATCH panvk-g610 017] panvk/csf: log the vertex-input layout used by
+ draws
+
+Diagnostic only.  v0.4.0 (32 advertised attributes, 32 descriptor slots)
+renders black even though the app reports no pipeline rejection and every
+frame is submitted; the previous 16/16 build (v0.3.7) draws the same scene.
+Dump the few distinct vertex-input layouts the app hands to draws: which
+attribute locations it declares, how many vertex buffers those reference,
+and how big the VS driver set ends up with the 32-slot layout.
+
+Mesa base range: 5a07217f034b3e50d8c7c7794f97a2df1742613b
+---
+ src/panfrost/vulkan/csf/panvk_vX_cmd_draw.c | 31 +++++++++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+diff --git a/src/panfrost/vulkan/csf/panvk_vX_cmd_draw.c b/src/panfrost/vulkan/csf/panvk_vX_cmd_draw.c
+index 00c5c5f..1766852 100644
+--- a/src/panfrost/vulkan/csf/panvk_vX_cmd_draw.c
++++ b/src/panfrost/vulkan/csf/panvk_vX_cmd_draw.c
+@@ -37,6 +37,7 @@
+ #include "panvk_query_pool.h"
+ #include "panvk_shader.h"
+ #include "panvk_tracepoints.h"
++#include "util/log.h"
+ 
+ #include "pan_desc.h"
+ #include "pan_earlyzs.h"
+@@ -360,6 +361,36 @@ prepare_vs_driver_set(struct panvk_cmd_buffer *cmdbuf, uint32_t repeat_count)
+    uint32_t vb_offset = vs_desc_info->dyn_bufs.count + MAX_VS_ATTRIBS + 1;
+    uint32_t desc_count = vb_offset + vb_count;
+ 
++   /* Diagnostic: dump the first few distinct vertex-input layouts so the
++    * attribute/sampler/dyn-buffer descriptor indices can be checked against
++    * what the shader actually reads.
++    */
++   {
++      static uint32_t dbg_valid, dbg_bind, dbg_lines;
++      static const void *dbg_shader;
++
++      if (dbg_lines < 8 &&
++          (vi->attributes_valid != dbg_valid ||
++           vi->bindings_valid != dbg_bind ||
++           cmdbuf->state.gfx.vs.shader != dbg_shader)) {
++         dbg_valid = vi->attributes_valid;
++         dbg_bind = vi->bindings_valid;
++         dbg_shader = cmdbuf->state.gfx.vs.shader;
++         dbg_lines++;
++         mesa_logi("[P0A-V19-DRAW] valid=0x%08x bind=0x%08x max=%u vbs=%u "
++                   "dyn=%u vb_off=%u desc=%u in_read=0x%08x",
++                   vi->attributes_valid, vi->bindings_valid, MAX_VS_ATTRIBS,
++                   vb_count, vs_desc_info->dyn_bufs.count, vb_offset,
++                   desc_count,
++                   cmdbuf->state.gfx.vs.shader->variants[0].info.attributes_read);
++         u_foreach_bit(a, vi->attributes_valid) {
++            const struct vk_vertex_attribute_state *va = &vi->attributes[a];
++
++            mesa_logi("[P0A-V19-DRAW]   loc=%u binding=%u offset=%u fmt=%u",
++                      a, va->binding, va->offset, (unsigned)va->format);
++         }
++      }
++   }
+    const struct panvk_descriptor_state *desc_state =
+       &cmdbuf->state.gfx.desc_state;
+    struct pan_ptr driver_set = panvk_cmd_alloc_dev_mem(
