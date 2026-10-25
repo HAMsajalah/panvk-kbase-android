@@ -101,7 +101,7 @@ index 0fd1a8c..5aab55f 100644
 +   static unsigned fills;
 +
 +   if (enabled < 0)
-+      enabled = os_get_option("PANVK_ANB_FILL") != NULL;
++      enabled = os_get_option("PANVK_ANB_FILL") == NULL; /* TEMP: default on for bisect */
 +   if (!enabled)
 +      return;
 +
