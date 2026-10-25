@@ -1,0 +1,46 @@
+From 9a8b7c6d5e4f30211f2e3d4c5b6a79880a1b2c3d Mon Sep 17 00:00:00 2001
+From: panvk-kbase-android worker <panvk-worker@localhost>
+Date: Sun, 25 Oct 2026 22:45:00 +0700
+Subject: [PATCH panvk-g610 016] panvk: reserve 32 VS attribute slots instead of
+ 16
+
+MAX_VS_ATTRIBS is the number of MALI_ATTRIBUTE descriptors reserved at the
+start of the vertex-shader driver set.  The app (D3D11 -> SPIR-V) puts its
+input elements at locations up to 31, so with the old value of 16 the
+descriptors for locations 16..31 did not exist and the vertex shader read
+whatever followed (the dummy sampler and the dynamic buffer table).
+
+Bumping MAX_VS_ATTRIBS alone is not enough: panvk_vX_nir_lower_descriptors.c
+hardcodes the dummy-sampler index for vertex shaders to 16, while
+prepare_vs_driver_set() places it right after the attribute table.  With 32
+slots the two disagree, every VS UBO/SSBO/texture handle is then off by 16
+entries and the frame renders black (v0.3.5/v0.3.6).  Derive the index from
+MAX_VS_ATTRIBS so producer and consumer can never disagree again.
+
+Tested GPU: none yet (compile-level)
+Mesa base range: 5a07217f034b3e50d8c7c7794f97a2df1742613b
+---
+ src/panfrost/vulkan/panvk_shader.h                     | 2 +-
+ src/panfrost/vulkan/panvk_vX_nir_lower_descriptors.c   | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/panfrost/vulkan/panvk_shader.h b/src/panfrost/vulkan/panvk_shader.h
+--- a/src/panfrost/vulkan/panvk_shader.h
++++ b/src/panfrost/vulkan/panvk_shader.h
+@@ -29,3 +29,3 @@
+ #define MAX_RTS 8
+-#define MAX_VS_ATTRIBS 16
++#define MAX_VS_ATTRIBS 32
+ 
+diff --git a/src/panfrost/vulkan/panvk_vX_nir_lower_descriptors.c b/src/panfrost/vulkan/panvk_vX_nir_lower_descriptors.c
+--- a/src/panfrost/vulkan/panvk_vX_nir_lower_descriptors.c
++++ b/src/panfrost/vulkan/panvk_vX_nir_lower_descriptors.c
+@@ -1193,5 +1193,5 @@
+    switch (nir->info.stage) {
+    case MESA_SHADER_VERTEX:
+       /* Dummy sampler comes after the vertex attributes. */
+-      dummy_sampler_idx = 16;
++      dummy_sampler_idx = MAX_VS_ATTRIBS;
+       break;
+-- 
+2.55.0
